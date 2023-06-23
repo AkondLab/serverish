@@ -1,6 +1,6 @@
 import logging
 
-from serverish.singlethon import Singlethon
+from serverish.singleton import Singleton
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -11,7 +11,7 @@ def gen_id(name: str):
     return ids.get_id(name)
 
 
-class IdManager(Singlethon):
+class IdManager(Singleton):
     """Manages unique IDs"""
     ids_counters = {}
 
