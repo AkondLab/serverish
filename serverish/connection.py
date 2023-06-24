@@ -2,7 +2,6 @@ import asyncio
 import logging
 import re
 import socket
-from typing import Sequence
 
 import aiodns
 import param
@@ -29,60 +28,46 @@ class Connection(HasStatuses):
             port (int): Port number
         """
         super().__init__(host=host, port=port, **kwargs)
-        self.check_methods = [self.diagnose_ping, self.diagnose_dns]
+        self.set_check_methods(ping=self.diagnose_ping, dns=self.diagnose_dns)
 
     def is_ip(self) -> bool:
         """Returns True if host is just IP address, not a hostname """
         return bool(self.r_ip.match(self.host))
 
-    async def diagnose_dns(self, deduce_from: Sequence[Status] | None = None) -> Status:
+    async def diagnose_dns(self) -> Status:
         """ Diagnoses DNS connection
-
-        Args:
-            deduce_from (Sequence[Status], optional): Statuses to deduce from. Defaults to None.
 
         Returns:
             Status: Status object, named 'dns'
         """
-        if deduce_from is not None:   # try to deduce from main. If main is OK or disabled, take it.
-            for s in deduce_from:
-                if s.name in ['main', 'ping'] and s in [Status.ok, Status.na]:
-                    return Status.deduced('dns', s)
         if self.is_ip():
-            return Status.na('dns', msg='IP address, skipping DNS check')
+            return Status.na(msg='IP address, skipping DNS check')
         resolver = aiodns.DNSResolver()
         try:
             await resolver.gethostbyname(self.host, socket.AF_INET)
         except aiodns.error.DNSError as e:
             try:
-                return Status.fail('dns', msg=f'{self.host}: {e.args[1]}')
+                return Status.fail(msg=f'{self.host}: {e.args[1]}')
             except (IndexError, TypeError, AttributeError):
-                return Status.fail('dns', msg=f'{self.host}: {e}')
+                return Status.fail(msg=f'{self.host}: {e}')
 
-        return Status.ok('dns', msg=f'DNS name {self.host} resolved')
+        return Status.ok(msg=f'DNS name {self.host} resolved')
 
-    async def diagnose_ping(self, deduce_from: Sequence[Status] | None = None) -> Status:
+    async def diagnose_ping(self) -> Status:
         """Diagnoses ping
-
-        Args:
-            deduce_from (Sequence[Status], optional): Statuses to deduce from. Defaults to None.
 
         Returns:
             Status: Status object, named 'ping'
         """
-        if deduce_from is not None:
-            for s in deduce_from:
-                if s.name in ['main'] and s in [Status.ok, Status.na]:
-                    return Status.deduced('ping', s)
         proc = await asyncio.create_subprocess_exec(
             'ping', '-c', '1', self.host,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE)
         _stdout, _stderr = await proc.communicate()
         if proc.returncode == 0:
-            return Status.ok('ping', msg=f'ping {self.host} successful')
+            return Status.ok(msg=f'ping {self.host} successful')
         else:
-            return Status.fail('ping', msg=f'ping {self.host} failed')
+            return Status.fail(msg=f'ping {self.host} failed')
 
     # async def diagnose_dns2(self) -> dict[str, Status]:
     #

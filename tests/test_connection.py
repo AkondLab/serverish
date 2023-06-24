@@ -19,4 +19,5 @@ def internet_on():
 async def test_connection_diagnostics_all_positive():
     c = Connection('google.com', 80)
     codes = await c.diagnose(no_deduce=True)
-    print(codes)
+    for s in codes.values():
+        assert s == 'ok'

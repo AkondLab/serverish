@@ -1,0 +1,19 @@
+# Start local NATS server with JetStream enabled for testing and development.
+# Start it by:
+# ```
+#   cd serverish/docker
+#   docker compose up
+# ```
+version: '3.8'
+services:
+  nats:  # Service name
+    image: nats:latest  # Image name
+    ports:  # Ports that will be exposed host:container
+      - "4222:4222"  # NATS core communication
+      - "8222:8222"  # Monitoring
+      - "6222:6222"  # Clustering
+      - "1883:1883"  # MQTT
+    volumes:  # Persistent volumes
+      - ./nats-store:/nats/jetstream  # Map local "nats-store" directory to "/nats/jetstream" inside the container
+      - ./nats.conf:/etc/nats/nats.conf  # Map local "nats.conf" file to "/etc/nats/nats.conf" inside the container
+    command: ["-c", "/etc/nats/nats.conf"]  # Command that will be executed when container starts

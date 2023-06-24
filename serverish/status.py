@@ -1,9 +1,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 
 
-class StatusEnum(Enum):
+class StatusEnum(StrEnum):
     """Status enum
 
     Statuses:
@@ -18,74 +18,69 @@ class StatusEnum(Enum):
     disabled = 'disabled'
 
 
+
+
 @dataclass
 class Status:
     """Status of the resource
-
     """
-    name: str = 'main'
     status: StatusEnum = StatusEnum.na
     msg: str = None
 
     # Helpers for easy status construction
     @classmethod
-    def na(cls, name: str = 'main', msg: str = None):
+    def na(cls, msg: str = None):
         """Returns Status object with status 'na' (not applicable)
 
         Args:
-            name (str, optional): Status name. Defaults to 'main'.
             msg (str, optional): Status message. Defaults to None.
 
         Returns:
             Status: Status object
         """
-        return cls(name, StatusEnum.na, msg)
+        return cls(StatusEnum.na, msg)
 
     @classmethod
-    def ok(cls, name: str = 'main', msg: str = None):
+    def ok(cls, msg: str = None):
         """Returns Status object with status 'ok'
 
         Args:
-            name (str, optional): Status name. Defaults to 'main'.
             msg (str, optional): Status message. Defaults to None.
 
         Returns:
             Status: Status object
         """
-        return cls(name, StatusEnum.ok, msg)
+        return cls(StatusEnum.ok, msg)
 
     @classmethod
-    def fail(cls, name: str = 'main', msg: str = None):
+    def fail(cls,  msg: str = None):
         """Returns Status object with status 'fail'
 
         Args:
-            name (str, optional): Status name. Defaults to 'main'.
             msg (str, optional): Status message. Defaults to None.
 
         Returns:
             Status: Status object
         """
-        return cls(name, StatusEnum.fail, msg)
+        return cls(StatusEnum.fail, msg)
 
     @classmethod
-    def disabled(cls, name: str = 'main', msg: str = None):
+    def disabled(cls, msg: str = None):
         """Returns Status object with status 'disabled'
 
         Args:
-            name (str, optional): Status name. Defaults to 'main'.
             msg (str, optional): Status message. Defaults to None.
 
         Returns:
             Status: Status object
         """
-        return cls(name, StatusEnum.disabled, msg)
+        return cls(StatusEnum.disabled, msg)
 
     @classmethod
-    def deduced(cls, name: str, source: Status, msg: str = None):
+    def deduced(cls, source: Status, msg: str = None):
         """Returns Status object with status deduced  from other
 
         Args:
-            name (str): Status name
             source (Status): Source status
             msg (str, optional): Status message. Defaults to 'Deduced form {src.name}'.
 
@@ -93,19 +88,19 @@ class Status:
             Status: Status object
         """
         if msg is None:
-            msg = f'Deduced form {source.name}'
-        return cls(name, source.status, msg)
+            msg = f'Deduced'
+        return cls(source.status, msg)
 
     def __eq__(self, other):
         if isinstance(other, (StatusEnum, str)):
             return self.status == other
         elif isinstance(other, Status):
-            return self.status == other.status and self.name == other.name
+            return self.status == other.status
         else:
             return False
 
     def __str__(self):
-        return f'{self.name}:{self.status}'
+        return f'{self.status}'
 
     def __bool__(self):
         return self.status == StatusEnum.ok
