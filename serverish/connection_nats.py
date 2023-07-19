@@ -10,16 +10,23 @@ from serverish.status import Status
 
 
 class ConnectionNATS(Connection):
+    """Watches NATS connection and reports status"""
+    subject_prefix = param.String(default='srvh')
     nc = param.ClassSelector(class_=NATS, allow_None=True)
 
-    def __init__(self, host: str, port: int = 4222, **kwargs):
+    def __init__(self,
+                 host: str, port: int = 4222,
+                 subject_prefix: str = 'srvh',
+                 **kwargs):
         """Initializes connection watcher
 
         Args:
             host (str): Hostname or IP address
             port (int): Port number
         """
-        super().__init__(host=host, port=port, **kwargs)
+        super().__init__(host=host, port=port,
+                         subject_prefix=subject_prefix,
+                         **kwargs)
         self.add_check_methods(at_beginning=True,
                                nats=self.diagnose_nats_connected,
                                nats_init=self.diagnose_initialized,

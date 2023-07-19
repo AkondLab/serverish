@@ -6,7 +6,8 @@
 # ```
 version: '3.8'
 services:
-  nats:  # Service name
+  # NATS server with JetStream enabled
+  nats:
     container_name: nats
     image: nats:latest  # Image name
     ports:  # Ports that will be exposed host:container
@@ -16,7 +17,17 @@ services:
       - "1883:1883"  # MQTT
     volumes:  # Persistent volumes
       - ./nats-store:/nats/jetstream  # Map local "nats-store" directory to "/nats/jetstream" inside the container
+      - ./nats-log:/nats/logs/        # Map local "nats-log" directory to "/nats/logs" inside the container
       - ./nats.conf:/etc/nats/nats.conf  # Map local "nats.conf" file to "/etc/nats/nats.conf" inside the container
     command: ["-c", "/etc/nats/nats.conf"]  # Command that will be executed when container starts
 
-
+#  # Temporary container that will setup JetStream on running NATS server from "nats" container
+#  nats-stream-setup:
+#    image: synadia/jsm:latest
+#    depends_on:
+#      - nats
+#    entrypoint: ["/bin/sh", "-c"]
+#    command:
+#      - |
+#        sleep 10 && \
+#        jsm streams add srvh_tests --subjects=srvh.test --storage=memory --retention=limits --max-msgs=100 --max-bytes=-1 --max-age=0 --max-msg-size=-1 --discard=old
