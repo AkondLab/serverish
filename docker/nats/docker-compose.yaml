@@ -7,6 +7,7 @@
 version: '3.8'
 services:
   nats:  # Service name
+    container_name: nats
     image: nats:latest  # Image name
     ports:  # Ports that will be exposed host:container
       - "4222:4222"  # NATS core communication
@@ -17,3 +18,5 @@ services:
       - ./nats-store:/nats/jetstream  # Map local "nats-store" directory to "/nats/jetstream" inside the container
       - ./nats.conf:/etc/nats/nats.conf  # Map local "nats.conf" file to "/etc/nats/nats.conf" inside the container
     command: ["-c", "/etc/nats/nats.conf"]  # Command that will be executed when container starts
+
+
