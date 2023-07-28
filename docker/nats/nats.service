@@ -1,0 +1,13 @@
+[Unit]
+Description=Nats Server
+Requires=docker.service
+After=docker.service
+
+[Service]
+WorkingDirectory=/home/poweruser/src/serverish/docker/nats
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose downRestart=always
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
