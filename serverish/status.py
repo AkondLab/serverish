@@ -1,9 +1,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from enum import Enum, StrEnum
+from enum import Enum
 
 
-class StatusEnum(StrEnum):
+class StatusEnum(Enum):
     """Status enum
 
     Statuses:
