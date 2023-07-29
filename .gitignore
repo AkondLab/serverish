@@ -131,3 +131,6 @@ dmypy.json
 
 # Pycharm
 .idea/
+
+/docker/nats/nats-log/
+/docker/nats/nats-store/
