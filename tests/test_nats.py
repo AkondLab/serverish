@@ -69,28 +69,28 @@ async def test_nats_publish():
             pytest.fail("Timeout exceeded while waiting for message")
         assert len(received_messages) == 1
         assert received_messages[0] == "Hello OCA!"
-#
-# @pytest.mark.asyncio  # This tells pytest this test is async
-# @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-# async def test_js_publish_subscribe():
-#     message_received = asyncio.Event()
-#     received_messages = []
-#
-#     async def message_handler(msg):
-#         received_messages.append(msg.data.decode())
-#         message_received.set()
-#
-#     c = ConnectionJetStream(host='localhost', port=4222,
-#                             streams={'srvh-s.test': {'subjects': ['srvh.test.js.foo1']}})
-#     async with c:
-#         await c.js.publish('srvh.test.js.foo1', b'Hello OCA!')
-#         await c.js.subscribe("srvh.test.js.foo1", cb=message_handler)
-#         try:
-#             await asyncio.wait_for(message_received.wait(), timeout=1)
-#         except asyncio.TimeoutError:
-#             pytest.fail("Timeout exceeded while waiting for message")
-#         assert len(received_messages) == 1
-#         assert received_messages[0] == "Hello OCA!"
+
+@pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_js_publish_subscribe():
+    message_received = asyncio.Event()
+    received_messages = []
+
+    async def message_handler(msg):
+        received_messages.append(msg.data.decode())
+        message_received.set()
+
+    c = ConnectionJetStream(host='localhost', port=4222,
+                            streams={'srvh-test': {'subjects': ['srvh.test.js.foo1']}})
+    async with c:
+        await c.js.publish('srvh.test.js.foo1', b'Hello OCA!')
+        await c.js.subscribe("srvh.test.js.foo1", cb=message_handler, deliver_policy='last')
+        try:
+            await asyncio.wait_for(message_received.wait(), timeout=1)
+        except asyncio.TimeoutError:
+            pytest.fail("Timeout exceeded while waiting for message")
+        assert len(received_messages) == 1
+        assert received_messages[0] == "Hello OCA!"
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async
@@ -104,9 +104,15 @@ async def test_js_subscribe_publish():
         message_received.set()
 
     c = ConnectionJetStream(host='localhost', port=4222,
-                            streams={'srvh-s.test': {'subjects': ['srvh.test.js.foo1']}})
+                            streams={'srvh-test': {
+                                'subjects': ['srvh.test.js.foo1'],
+                                'retention': 'limits',
+                                'max_consumers': 1,
+                                'max_msgs': 10,
+                                'storage': 'memory',
+                            }})
     async with c:
-        await c.js.subscribe("srvh.test.js.foo1", cb=message_handler)
+        await c.js.subscribe("srvh.test.js.foo1", cb=message_handler, deliver_policy='new')
         await c.js.publish('srvh.test.js.foo1', b'Hello OCA!')
         try:
             await asyncio.wait_for(message_received.wait(), timeout=1)
@@ -114,4 +120,5 @@ async def test_js_subscribe_publish():
             pytest.fail("Timeout exceeded while waiting for message")
         assert len(received_messages) == 1
         assert received_messages[0] == "Hello OCA!"
+
 

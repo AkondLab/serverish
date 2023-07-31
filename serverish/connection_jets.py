@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 class ConnectionJetStream(ConnectionNATS):
     """Watches JetStream connection and reports status"""
     streams = param.Dict(
-        default={'srvh-s': {'subjects': ['srvh']}},
+        default={'test': {'subjects': ['test.*']}},  #  {'srvh-s': {'subjects': ['srvh']}},
         doc='JetStream streams to be created as mapping of stream name to stream parameters. ',
     )
     js = param.ClassSelector(class_=JetStreamContext, allow_None=True)
@@ -55,12 +55,12 @@ class ConnectionJetStream(ConnectionNATS):
         self.js = nc.jetstream()
 
         # Persist messages on 'foo's subject.
-        await self.js.add_stream(name="sample-stream", subjects=["foo"])
-        await self.js.add_stream(name="sample-stream", subjects=["foo"])
-        await self.js.add_stream(name="dupa", subjects=['srvh.test.js.foo'])
-        await self.js.add_stream(name="dupa2", subjects=['srvh.test.js.foo2'])
-        await self.js.add_stream(name="srvh-s", subjects=['srvh.test.js.foo1'])
-        logger.warning('So far so good')
+        # await self.js.add_stream(name="sample-stream", subjects=["foo"])
+        # await self.js.add_stream(name="sample-stream", subjects=["foo"])
+        # await self.js.add_stream(name="dupa", subjects=['srvh.test.js.foo'])
+        # await self.js.add_stream(name="dupa2", subjects=['srvh.test.js.foo2'])
+        # await self.js.add_stream(name="srvh-s", subjects=['srvh.test.js.foo1'])
+        # logger.warning('So far so good')
 
         for stream, params in self.streams.items():
             try:
@@ -69,6 +69,46 @@ class ConnectionJetStream(ConnectionNATS):
                 logger.error(f"Error creating stream {stream}: {e}")
 
 
+    async def ensure_subject_in_stream(self, stream: str, subject: str,
+                                       move_if_needed: bool = True):
+        """Ensures that a subject is in a stream
+
+        Note, that if `stream.config.subjects` conains a wildcarded `test.*` subject,
+        then `test.foo` will be accepted as well.
+
+        The method first ensures existence of the stream, if the stream does not exist, it throws an IOError.
+        (We do not create streams on the fly, because we want to have control over the stream parameters.)
+
+        If the stream exists, it checks if the subject is in the stream (taking int account wildcards).
+        If the subject is not in the stream, checks if subject is in another stream.
+        If so, when move_if_needed == False raises IOError, otherwise removes it from there.
+        Then adds the subject to the stream of interest.
+        """
+        js: JetStreamContext = self.js
+        try:
+            await js.stream_info(stream)
+        except nats.errors.Error as e:
+            raise IOError(f"Stream {stream} does not exist?") from e
+
+        info = await js.stream_info(stream)
+        cfg = info.config
+        subjects = cfg.subjects
+        import fnmatch
+        if any(fnmatch.fnmatch(subject, s) for s in subjects):
+            return
+        # find stream with the subject
+        ast = await js.find_stream_name_by_subject(subject)
+        if ast:
+            if not move_if_needed:
+                raise IOError(f"Subject {subject} is already in stream {ast}")
+            ainfo = await js.stream_info(ast)
+            acfg = ainfo.config
+            acfg.subjects = [s for s in acfg.subjects if not fnmatch.fnmatch(subject, s)]
+            await js.update_stream(config=acfg)
+
+        # add subject to stream
+        cfg.subjects.append(subject)
+        await js.update_stream(config=cfg)
 
 
     async def diagnose_stream_config(self) -> Status:
