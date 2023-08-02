@@ -8,6 +8,8 @@ Functions:
     get_subscriber
 
 """
+from __future__ import annotations
+
 import json
 import logging
 
