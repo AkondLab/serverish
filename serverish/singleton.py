@@ -2,6 +2,7 @@ import logging
 
 from param.parameterized import ParameterizedMetaclass
 
+from serverish.collector import Collector
 from serverish.manageable import Manageable
 
 
@@ -15,7 +16,7 @@ class SingletonMeta(ParameterizedMetaclass):
         return cls._instances[cls]
 
 
-class Singleton(Manageable, metaclass=SingletonMeta):
+class Singleton(Collector, metaclass=SingletonMeta):
     """Singleton base class. One instance per one concrete class"""
     pass
 

@@ -5,7 +5,6 @@ from serverish.manageable import Manageable
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
-@dataclass
 class Collector(Manageable):
     """Has manageable children"""
     children: list[Manageable] = None
