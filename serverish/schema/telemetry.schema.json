@@ -1,0 +1,13 @@
+{
+    "type": "object",
+    "properties": {
+        "ts": {
+            "type": "array",
+            "items": {"type": "integer"}
+        },
+        "measurements": {
+            "type": "object"
+        }
+    },
+    "required": ["version", "published", "config"]
+}
