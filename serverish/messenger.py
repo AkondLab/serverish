@@ -27,6 +27,10 @@ from serverish.singleton import Singleton
 log = logging.getLogger(__name__.rsplit('.')[-1])
 
 
+class MsgData():
+    def __dir__(self) -> dict:
+        return self.__dict__
+
 class Messenger(Singleton):
     conn = param.ClassSelector(class_=ConnectionJetStream, default=None, allow_None=True, doc="Messenger Connection")
     validation = param.Boolean(default=True, doc="Validate messages against schema")
@@ -223,7 +227,7 @@ class MsgPublisher(MsgTopic):
         return msg
 
 
-async def get_publisher(topic):
+async def get_publisher(topic) -> MsgPublisher:
     """Returns a publisher for a given topic
 
     Args:

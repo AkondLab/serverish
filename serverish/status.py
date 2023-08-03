@@ -2,8 +2,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+try:
+    from enum import StrEnum
+except ImportError:
+    class StrEnum(str, Enum):
+        pass
 
-class StatusEnum(Enum):
+
+class StatusEnum(StrEnum):
     """Status enum
 
     Statuses:

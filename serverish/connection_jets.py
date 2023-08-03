@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 class ConnectionJetStream(ConnectionNATS):
     """Watches JetStream connection and reports status"""
     streams = param.Dict(
-        default={'test': {'subjects': ['test.*']}},  #  {'srvh-s': {'subjects': ['srvh']}},
+        default={},  # {'test': {'subjects': ['test.*']}},  #  {'srvh-s': {'subjects': ['srvh']}},
         doc='JetStream streams to be created as mapping of stream name to stream parameters. ',
     )
     js = param.ClassSelector(class_=JetStreamContext, allow_None=True)
