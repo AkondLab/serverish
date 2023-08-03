@@ -31,10 +31,4 @@ jobs:
 
     - name: Run tests
       run: |
-        poetry run pytest --junitxml=test-results.xml
-
-    - name: Annotate test failures
-      uses: ashley-taylor/junit-report-annotations-action@v1.0
-      if: always()
-      with:
-        path: test-results.xml
+        poetry run pytest
