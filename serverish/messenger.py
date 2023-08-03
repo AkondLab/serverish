@@ -117,7 +117,7 @@ class Messenger(Singleton):
             str: string representation
         """
         data, meta = cls.split_msg(msg)
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S", meta.pop('ts'))
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", tuple(meta.pop('ts')))
         id = meta.pop('id')
         smeta = ' '.join(f"{k}:{v}" for k, v in meta.items())
         sdata = json.dumps(data)

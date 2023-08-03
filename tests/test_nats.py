@@ -7,6 +7,7 @@ import socket
 from serverish.connection import Connection
 from serverish.connection_jets import ConnectionJetStream
 from serverish.connection_nats import ConnectionNATS
+from serverish.status import StatusEnum
 
 
 def is_nats_running(host='localhost', port=4222):
@@ -28,7 +29,7 @@ async def test_nats():
     async with c:
         codes = await c.diagnose(no_deduce=True)
         for s in codes.values():
-            assert s == 'ok'
+            assert s == StatusEnum.ok
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
@@ -37,7 +38,7 @@ async def test_jests():
     async with c:
         codes = await c.diagnose(no_deduce=True)
         for s in codes.values():
-            assert s == 'ok'
+            assert s == StatusEnum.ok
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")

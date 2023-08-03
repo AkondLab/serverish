@@ -3,6 +3,7 @@ import socket
 
 
 from serverish.connection import Connection
+from serverish.status import StatusEnum
 
 
 def internet_on():
@@ -20,4 +21,4 @@ async def test_connection_diagnostics_all_positive():
     c = Connection('google.com', 80)
     codes = await c.diagnose(no_deduce=True)
     for s in codes.values():
-        assert s == 'ok'
+        assert s == StatusEnum.ok
