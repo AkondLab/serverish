@@ -1,0 +1,14 @@
+{
+    "type": "object",
+    "properties": {
+        "version": {"type": "string"},
+        "published": {
+            "type": "array",
+            "items": {"type": "integer"}
+        },
+        "config": {
+            "type": "object"
+        }
+    },
+    "required": ["version", "published", "config"]
+}
