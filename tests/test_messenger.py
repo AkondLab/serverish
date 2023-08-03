@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import logging
 
 import pytest
 import socket
@@ -28,7 +29,11 @@ async def test_messenger_pub_simple():
 
     await Messenger().open(host='localhost', port=4222)
     pub = await get_publisher('test.messenger')
-    await pub.publish(data={'msg': 'test_messenger_pub'})
+    await pub.publish(data={'msg': 'test_messenger_pub'},
+                      meta={
+                          'sender': 'test_messenger_pub',
+                          'trace_level': logging.WARN,
+                      })
     await Messenger().close()
 
 

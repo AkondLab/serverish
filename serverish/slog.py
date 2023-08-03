@@ -1,5 +1,7 @@
 """ Structured LOGging
 
+This is currently not in use, because we are using async messaging, and `logging` does not support async.
+
 By adding a ```meta``` field to the log message `extra`, one can add structured data to your logs.
 This structure will be interpreted by the StructuredLogHandler.
 """

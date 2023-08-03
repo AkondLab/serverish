@@ -10,14 +10,18 @@ Functions:
 """
 from __future__ import annotations
 
-import json
 import logging
+import json
+import time
 
+import jsonschema
 import param
 
 from serverish.collector import Collector
 from serverish.connection_jets import ConnectionJetStream
+from serverish.idmanger import gen_id
 from serverish.manageable import Manageable
+from serverish.msgvalidator import MsgValidator
 from serverish.singleton import Singleton
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
@@ -25,8 +29,10 @@ log = logging.getLogger(__name__.rsplit('.')[-1])
 
 class Messenger(Singleton):
     conn = param.ClassSelector(class_=ConnectionJetStream, default=None, allow_None=True, doc="Messenger Connection")
+    validation = param.Boolean(default=True, doc="Validate messages against schema")
 
     def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
+        self.validator = MsgValidator()
         super().__init__(name, parent, **kwargs)
 
     @property
@@ -45,6 +51,100 @@ class Messenger(Singleton):
         if self.conn is not None:
             await self.connection.disconnect()
             self.conn = None
+
+    @staticmethod
+    def create_meta(meta: dict | None = None) -> dict:
+        """Creates meta data for a message
+
+        Args:
+            meta (dict): meta data to be sent, many metadata will be added automatically
+
+        Returns:
+            dict: meta data
+        """
+        ret = {
+            'id': gen_id('msg'),
+            # "sender": "sender_name",
+            # "receiver": "receiver_name",  # only for direct messages
+            'ts': list(time.gmtime()),
+            'trace_level': logging.DEBUG,  # Message trace will be logged if loglevel <= trace_level
+            "message_type": "",
+            'tags': [],
+        }
+        if meta is not None:
+            ret.update(meta)
+        return ret
+
+    @classmethod
+    def create_msg(cls, data: dict | None = None, meta: dict | None = None) -> dict:
+        """Creates a message with data and meta
+
+        Args:
+            data (dict): data to be sent
+            meta (dict): meta data to be sent, many metadata will be added automatically
+
+        Returns:
+            dict: message
+        """
+        msg = {}
+        if data is not None:
+            msg['data'] = data
+        msg['meta'] = cls.create_meta(meta)
+        return msg
+
+    @staticmethod
+    def split_msg(msg: dict) -> tuple[dict, dict]:
+        """Splits message into data and meta
+
+        Args:
+            msg (dict): message
+
+        Returns:
+            tuple[dict, dict]: data, meta
+        """
+        data = msg.get('data', {})
+        meta = msg.get('meta', {})
+        return data, meta
+
+    @classmethod
+    def msg_to_repr(cls, msg: dict) -> str:
+        """Converts message to a string representation
+
+        Args:
+            msg (dict): message
+
+        Returns:
+            str: string representation
+        """
+        data, meta = cls.split_msg(msg)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", meta.pop('ts'))
+        id = meta.pop('id')
+        smeta = ' '.join(f"{k}:{v}" for k, v in meta.items())
+        sdata = json.dumps(data)
+        return f"{ts} {id} {smeta} data:{sdata[:100]}"
+
+    @classmethod
+    def log_msg_trace(cls, msg: dict, comment: str) -> None:
+        """Logs a message if trace_level is high enough
+
+        Args:
+            msg (dict): message
+            comment (str): comment to log
+        """
+        data, meta = cls.split_msg(msg)
+        trace_level = meta.get('trace_level', logging.DEBUG)
+        if trace_level < log.getEffectiveLevel():
+            return
+        log.log(trace_level, f"{comment} [{cls.msg_to_repr(msg)}]")
+
+    def msg_validate(self, msg: dict):
+        """Validates message, raises jsonschema.ValidationError if invalid
+
+        Args:
+            msg (dict): message
+        """
+        if self.validation:
+            self.validator.validate(msg)
 
     def encode(self, msg: dict) -> bytes:
         return json.dumps(msg).encode('utf-8')
@@ -103,7 +203,7 @@ class MsgTopic(Manageable):
 
 
 class MsgPublisher(MsgTopic):
-    async def publish(self, data: dict = None, **kwargs) -> None:
+    async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
         """Publishes a message
 
         Args:
@@ -111,8 +211,16 @@ class MsgPublisher(MsgTopic):
             kwargs: additional arguments to pass to the connection
 
         """
-        bdata = self.messenger.encode(data)
+        msg = self.messenger.create_msg(data, meta)
+        bdata = self.messenger.encode(msg)
+        try:
+            self.messenger.msg_validate(msg)
+        except jsonschema.ValidationError as e:
+            log.error(f"Message {msg['meta']['id']} validation error: {e}")
+            raise e
+        self.messenger.log_msg_trace(msg, f"PUB to {self.topic}")
         await self.connection.js.publish(self.topic, bdata, **kwargs)
+        return msg
 
 
 async def get_publisher(topic):
