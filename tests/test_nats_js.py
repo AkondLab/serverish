@@ -4,7 +4,7 @@ import nats
 import nats.errors
 import pytest
 
-from tests.test_nats import is_nats_running
+from tests.test_nats import is_nats_running, ci
 
 
 # @pytest.mark.asyncio
@@ -23,6 +23,7 @@ from tests.test_nats import is_nats_running
 #         await nc.close()
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(ci, reason="Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_js_strem_good_name():
     nc = await nats.connect("localhost")

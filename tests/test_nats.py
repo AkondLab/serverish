@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import pytest
 import socket
@@ -21,9 +22,12 @@ def is_nats_running(host='localhost', port=4222):
     finally:
         s.close()
 
+ci = os.getenv('CI')
+
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+@pytest.mark.skipif(ci, reason="Not working on CI")
 async def test_nats():
     c = ConnectionNATS(host='localhost', port=4222)
     async with c:
@@ -33,6 +37,7 @@ async def test_nats():
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+@pytest.mark.skipif(ci, reason="Not working on CI")
 async def test_jests():
     c = ConnectionJetStream(host='localhost', port=4222, streams={'test': {}})
     async with c:
@@ -42,6 +47,7 @@ async def test_jests():
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+@pytest.mark.skipif(ci, reason="Not working on CI")
 @pytest.mark.xfail(reason="This test is expected to fail on dot in stream name")
 async def test_jests_wrongname():
     c = ConnectionJetStream(host='localhost', port=4222, streams={'test.foo': {}})

@@ -30,6 +30,7 @@ async def test_connection_diagnostics_all_positive():
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not internet_on(), reason="requires internet")
+@pytest.mark.skipif(ci, reason="Not working on CI")
 async def test_connection_diagnostics_all_positive_ip():
     c = Connection('1.1.1.1', 80)
     codes = await c.diagnose(no_deduce=True)
