@@ -9,7 +9,7 @@ import socket
 from serverish.connection import Connection
 from serverish.connection_jets import ConnectionJetStream
 from serverish.connection_nats import ConnectionNATS
-from serverish.messenger import get_publisher, Messenger
+from serverish.messenger import Messenger, get_publisher, get_subscription
 from tests.test_connection import ci
 from tests.test_nats import is_nats_running, ensure_stram_for_tests
 
@@ -31,6 +31,7 @@ async def test_messenger_pub_simple():
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_simple_cm():
     await ensure_stram_for_tests("srvh-test", "test.messenger")
@@ -41,30 +42,32 @@ async def test_messenger_pub_simple_cm():
 
 
 
-#
-# @pytest.mark.asyncio  # This tells pytest this test is async
-# @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-# async def test_messenger_pub_sub():
-#
-#     now = datetime.datetime.now()
-#     pub = await get_publisher('test.messenger')
-#     sub = await get_subscriber('test.messenger', deliver_policy='by_start_time', opt_start_time=now)
-#
-#     async def subsciber_task(sub):
-#         async for msg in sub:
-#             print(msg.data)
-#             if msg.data['final']:
-#                 break
-#
-#     async def publisher_task(pub):
-#         for i in range(10):
-#             await pub.publish(data={'n': i, 'final': False})
-#             await asyncio.sleep(0.1)
-#         await pub.publish(data={'n': 10, 'final': True})
-#
-#     await asyncio.gather(subsciber_task(sub), publisher_task(pub))
-#     await pub.close()
-#     await sub.close()
+
+@pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_messenger_pub_sub():
+
+    now = datetime.datetime.now()
+    pub = await get_publisher('test.messenger')
+    sub = await get_subscription('test.messenger', deliver_policy='by_start_time', opt_start_time=now)
+
+    async def subsciber_task(sub):
+        async for msg in sub:
+            print(msg.data)
+            if msg.data['final']:
+                break
+
+    async def publisher_task(pub):
+        for i in range(10):
+            await pub.publish(data={'n': i, 'final': False})
+            await asyncio.sleep(0.1)
+        await pub.publish(data={'n': 10, 'final': True})
+
+    async with Messenger().context(host='localhost', port=4222):
+        await asyncio.gather(subsciber_task(sub), publisher_task(pub))
+    await pub.close()
+    await sub.close()
 #
 # @pytest.mark.asyncio  # This tells pytest this test is async
 # @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
