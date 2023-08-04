@@ -78,10 +78,10 @@ async def test_messenger_pub_sub_pub():
     now = datetime.datetime.now()
     pub = await get_publisher('test.messenger')
     # sub = await get_subscription('test.messenger', deliver_policy='by_start_time', opt_start_time=now)
-    sub = await get_subscription('test.messenger', deliver_policy='all')
+    sub = await get_reader('test.messenger', deliver_policy='all')
     collected = []
     async def subsciber_task(sub):
-        async for msg in sub:
+        async for msg, meta in sub:
             print(msg)
             collected.append(msg)
             if msg['final']:
@@ -110,7 +110,7 @@ async def test_messenger_pub_time_pub_sub():
     pub = await get_publisher('test.messenger')
     collected = []
     async def subsciber_task(sub):
-        async for msg in sub:
+        async for msg, meta in sub:
             print(msg)
             collected.append(msg)
             if msg['final']:
@@ -129,7 +129,7 @@ async def test_messenger_pub_time_pub_sub():
         await asyncio.sleep(0.1)
         now = datetime.datetime.now()
         await publisher_task(pub, finalize=False) # publish 11 more
-        sub = await get_subscription('test.messenger', deliver_policy='by_start_time', opt_start_time=now)
+        sub = await get_reader('test.messenger', deliver_policy='by_start_time', opt_start_time=now)
         await subsciber_task(sub)
         await pub.close()
         await sub.close()
