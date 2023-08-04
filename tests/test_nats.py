@@ -23,6 +23,11 @@ def is_nats_running(host='localhost', port=4222):
     finally:
         s.close()
 
+async def ensure_stram_for_tests(stream, subject):
+    c = ConnectionJetStream(host='localhost', port=4222)
+    async with c:
+        await c.ensure_subject_in_stream(stream, subject, create_stram_if_needed=True)
+
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async
@@ -80,6 +85,8 @@ async def test_nats_publish():
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_js_publish_subscribe():
+    await ensure_stram_for_tests('srvh-test', 'srvh.test.js.foo1')
+
     message_received = asyncio.Event()
     received_messages = []
 
@@ -87,8 +94,7 @@ async def test_js_publish_subscribe():
         received_messages.append(msg.data.decode())
         message_received.set()
 
-    c = ConnectionJetStream(host='localhost', port=4222,
-                            streams={'srvh-test': {'subjects': ['srvh.test.js.foo1']}})
+    c = ConnectionJetStream(host='localhost', port=4222)
     async with c:
         await c.js.publish('srvh.test.js.foo1', b'Hello OCA!')
         await c.js.subscribe("srvh.test.js.foo1", cb=message_handler, deliver_policy='last')
@@ -103,6 +109,8 @@ async def test_js_publish_subscribe():
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_js_subscribe_publish():
+    await ensure_stram_for_tests('srvh-test', 'srvh.test.js.foo1')
+
     message_received = asyncio.Event()
     received_messages = []
 
@@ -110,14 +118,7 @@ async def test_js_subscribe_publish():
         received_messages.append(msg.data.decode())
         message_received.set()
 
-    c = ConnectionJetStream(host='localhost', port=4222,
-                            streams={'srvh-test': {
-                                'subjects': ['srvh.test.js.foo1'],
-                                'retention': 'limits',
-                                'max_consumers': 1,
-                                'max_msgs': 10,
-                                'storage': 'memory',
-                            }})
+    c = ConnectionJetStream(host='localhost', port=4222)
     async with c:
         await c.js.subscribe("srvh.test.js.foo1", cb=message_handler, deliver_policy='new')
         await c.js.publish('srvh.test.js.foo1', b'Hello OCA!')

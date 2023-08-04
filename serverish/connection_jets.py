@@ -72,14 +72,16 @@ class ConnectionJetStream(ConnectionNATS):
 
 
     async def ensure_subject_in_stream(self, stream: str, subject: str,
+                                       create_stram_if_needed: bool = False,
                                        move_if_needed: bool = True):
         """Ensures that a subject is in a stream
 
-        Note, that if `stream.config.subjects` conains a wildcarded `test.*` subject,
+        Note, that if `stream.config.subjects` contains a wildcarded `test.*` subject,
         then `test.foo` will be accepted as well.
 
-        The method first ensures existence of the stream, if the stream does not exist, it throws an IOError.
-        (We do not create streams on the fly, because we want to have control over the stream parameters.)
+        The method first ensures existence of the stream, if the stream does not exist, it throws an IOError
+        or creates it if create_stram_if_needed.
+        (We do not create streams on the fly by default, because usually one have to control the stream parameters.)
 
         If the stream exists, it checks if the subject is in the stream (taking int account wildcards).
         If the subject is not in the stream, checks if subject is in another stream.
@@ -90,7 +92,10 @@ class ConnectionJetStream(ConnectionNATS):
         try:
             await js.stream_info(stream)
         except nats.errors.Error as e:
-            raise IOError(f"Stream {stream} does not exist?") from e
+            if create_stram_if_needed:
+                await js.add_stream(name=stream)
+            else:
+                raise IOError(f"Stream {stream} does not exist?") from e
 
         info = await js.stream_info(stream)
         cfg = info.config
