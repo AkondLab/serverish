@@ -1,10 +1,12 @@
 import asyncio
+import os
 
 import nats
 import nats.errors
 import pytest
 
-from tests.test_nats import is_nats_running, ci
+from tests.test_connection import ci
+from tests.test_nats import is_nats_running
 
 
 # @pytest.mark.asyncio

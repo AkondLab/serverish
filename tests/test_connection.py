@@ -17,7 +17,7 @@ def internet_on():
     return False
 
 
-ci = os.getenv('CI')
+ci = bool(os.getenv('CI'))
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not internet_on(), reason="requires internet")

@@ -9,6 +9,7 @@ from serverish.connection import Connection
 from serverish.connection_jets import ConnectionJetStream
 from serverish.connection_nats import ConnectionNATS
 from serverish.status import StatusEnum
+from tests.test_connection import ci
 
 
 def is_nats_running(host='localhost', port=4222):
@@ -22,7 +23,6 @@ def is_nats_running(host='localhost', port=4222):
     finally:
         s.close()
 
-ci = os.getenv('CI')
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async
