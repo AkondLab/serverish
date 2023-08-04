@@ -30,6 +30,16 @@ async def test_messenger_pub_simple():
     await Messenger().close()
 
 
+@pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_messenger_pub_simple_cm():
+    await ensure_stram_for_tests("srvh-test", "test.messenger")
+
+    async with Messenger().context(host='localhost', port=4222):
+        assert Messenger().is_open
+    assert not Messenger().is_open
+
+
 
 #
 # @pytest.mark.asyncio  # This tells pytest this test is async

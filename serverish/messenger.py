@@ -10,6 +10,7 @@ Functions:
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import json
 import time
@@ -34,6 +35,8 @@ class MsgData():
 class Messenger(Singleton):
     conn = param.ClassSelector(class_=ConnectionJetStream, default=None, allow_None=True, doc="Messenger Connection")
     validation = param.Boolean(default=True, doc="Validate messages against schema")
+    default_host = param.String(default='localhost', doc="Default NATS host name")
+    default_port = param.Integer(default=4222, doc="Default NATS port number")
 
     def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
         self.validator = MsgValidator()
@@ -45,7 +48,11 @@ class Messenger(Singleton):
             raise ValueError("Messenger Connection opened, use configure(host, port) first")
         return self.conn
 
-    async def open(self, host, port):
+    async def open(self, host: str | None = None, port: int | None = None):
+        if host is None:
+            host = self.default_host
+        if port is None:
+            port = self.default_port
         if self.conn is not None:
             log.warning("Messenger Connection already opened, ignoring")
         self.conn = ConnectionJetStream(host, port)
@@ -55,6 +62,33 @@ class Messenger(Singleton):
         if self.conn is not None:
             await self.connection.disconnect()
             self.conn = None
+
+    @property
+    def is_open(self) -> bool:
+        return self.conn is not None
+
+    @contextlib.asynccontextmanager
+    async def context(self, host: str | None, port: int | None):
+        """Context manager for connection
+
+        Args:
+            host (str): Hostname or IP address
+            port (int): Port number
+
+        Returns:
+            Messenger: self
+
+        Usage:
+            msg = Messenger()
+            async with msg.context(host, port) as msg:
+                pass # do something
+        """
+        await self.open(host, port)
+        try:
+            yield self
+        finally:
+            await self.close()
+
 
     @staticmethod
     def create_meta(meta: dict | None = None) -> dict:

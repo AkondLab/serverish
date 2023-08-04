@@ -7,7 +7,7 @@ from serverish.messenger import Messenger, get_publisher
 async def do():
     t = 22.5
 
-    pub = await get_publisher()
+    pub = await get_publisher('test.telemetrypubexmaple')
     await pub.publish(data={
         'ts': list(time.gmtime()),
         'measurements': {
@@ -16,14 +16,25 @@ async def do():
     })
 
 
-async def main():
+host = 'localhost'
+port = 4222
+
+async def main1():
     msg = Messenger()
-    await msg.open()
 
+    await msg.open(host, port)
     await do()
-
     await msg.close()
 
 
+async def main2():
+    msg = Messenger()
+
+    async with msg.context(host, port) as msg:
+        await do()
+
+
 if __name__ == '__main__':
-    asyncio.run(main())
+    # both versions are ok
+    asyncio.run(main1())
+    # asyncio.run(main2())
