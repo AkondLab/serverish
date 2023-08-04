@@ -10,10 +10,12 @@ from serverish.connection import Connection
 from serverish.connection_jets import ConnectionJetStream
 from serverish.connection_nats import ConnectionNATS
 from serverish.messenger import get_publisher, Messenger
+from tests.test_connection import ci
 from tests.test_nats import is_nats_running, ensure_stram_for_tests
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_simple():
     await ensure_stram_for_tests("srvh-test", "test.messenger")

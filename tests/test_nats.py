@@ -83,6 +83,7 @@ async def test_nats_publish():
         assert received_messages[0] == "Hello OCA!"
 
 @pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_js_publish_subscribe():
     await ensure_stram_for_tests('srvh-test', 'srvh.test.js.foo1')
@@ -107,6 +108,7 @@ async def test_js_publish_subscribe():
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_js_subscribe_publish():
     await ensure_stram_for_tests('srvh-test', 'srvh.test.js.foo1')
