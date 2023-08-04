@@ -9,5 +9,5 @@
             "type": "object"
         }
     },
-    "required": ["version", "published", "config"]
+    "required": ["ts", "measurements"]
 }
