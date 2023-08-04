@@ -9,7 +9,7 @@ import socket
 from serverish.connection import Connection
 from serverish.connection_jets import ConnectionJetStream
 from serverish.connection_nats import ConnectionNATS
-from serverish.messenger import Messenger, get_publisher, get_subscription
+from serverish.messenger import Messenger, get_publisher, get_reader
 from tests.test_connection import ci
 from tests.test_nats import is_nats_running, ensure_stram_for_tests
 
@@ -50,12 +50,12 @@ async def test_messenger_pub_sub():
 
     now = datetime.datetime.now()
     pub = await get_publisher('test.messenger')
-    sub = await get_subscription('test.messenger', deliver_policy='by_start_time', opt_start_time=now)
+    sub = await get_reader('test.messenger', deliver_policy='by_start_time', opt_start_time=now)
 
     async def subsciber_task(sub):
-        async for msg in sub:
-            print(msg)
-            if msg['final']:
+        async for data, meta in sub:
+            print(data)
+            if data['final']:
                 break
 
     async def publisher_task(pub):
