@@ -104,7 +104,10 @@ class ConnectionJetStream(ConnectionNATS):
         if any(fnmatch.fnmatch(subject, s) for s in subjects):
             return
         # find stream with the subject
-        ast = await js.find_stream_name_by_subject(subject)
+        try:
+            ast = await js.find_stream_name_by_subject(subject)
+        except Exception as e:
+            ast = None
         if ast:
             if not move_if_needed:
                 raise IOError(f"Subject {subject} is already in stream {ast}")
