@@ -198,7 +198,7 @@ class Messenger(Singleton):
 
     @staticmethod
     def get_publisher(subject: str) -> MsgPublisher:
-        """Returns a publisher for a given topic
+        """Returns a publisher for a given subject
 
         Args:
             subject (str): subject to publish to
@@ -206,34 +206,34 @@ class Messenger(Singleton):
         Returns:
             MsgPublisher: message publisher
         """
-        return MsgPublisher(topic=subject, parent=Messenger())
+        return MsgPublisher(subject=subject, parent=Messenger())
 
     @staticmethod
-    def get_subscription(topic: str, queue: str | None = None, durable: str | None = None, **kwargs) -> MsgSubscription:
-        """Returns a subscriber for a given topic
+    def get_subscription(subject: str, queue: str | None = None, durable_name: str | None = None, **kwargs) -> MsgSubscription:
+        """Returns a subscriber for a given subject
 
         Args:
-            topic (str): topic to subscribe to
-            queue (str): queue name, if None, topic is used
-            durable (str): durable name, if None, queue is used
+            subject (str): subject to subscribe to
+            queue (str): queue name, if None, subject is used
+            durable_name (str): durable name, if None, queue is used
 
         Returns:
             MsgSubscription: message subscriber
         """
-        return MsgSubscription(topic=topic, queue=queue, durable=durable, parent=Messenger(), **kwargs)
+        return MsgSubscription(subject=subject, queue=queue, durable_name=durable_name, parent=Messenger(), **kwargs)
 
 
 
 
 
 class MsgSubject(Manageable):
-    subject: str = param.String(default=None, allow_None=True, doc="User topic to publish to, prefix may be added")
-    """Message topic operator
+    subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
+    """Message subject operator
 
     Message publisher/subsriber etc base
 
     Args:
-        topic (str): topic to publish to
+        subject (str): subject to publish to
     """
 
     def __init__(self, **kwargs) -> None:
@@ -283,17 +283,17 @@ class MsgPublisher(MsgSubject):
         try:
             await self.connection.js.publish(self.subject, bdata, **kwargs)
         except nats.js.errors.NoStreamResponseError as e:
-            log.error(f"Tying to publish to subject '{self.subject}' which may be not in stream: "
+            log.error(f"Trying to publish to subject '{self.subject}' which may be not in stream: "
                       f"Message {msg['meta']['id']} publish error: {e}")
             raise e
         except Exception as e:
-            log.error(f"Tying to publish to subject '{self.subject}' failed. "
+            log.error(f"Trying to publish to subject '{self.subject}' failed. "
                       f"Message {msg['meta']['id']} publish error: {e}")
             raise e
         return msg
 
 class MsgSubscription(MsgSubject):
-    queue: str = param.String(default=None, allow_None=True, doc="Queue name, if None, topic is used")
+    queue: str = param.String(default=None, allow_None=True, doc="Queue name, if None, subject is used")
     durable_name: str = param.String(default=None, allow_None=True, doc="Durable name, if None, queue is used")
     deliver_policy: str = param.ObjectSelector(default='all',
                                                objects=['all', 'last', 'new',
@@ -335,7 +335,7 @@ class MsgSubscription(MsgSubject):
 
         msg = self.messenger.decode(bmsg.data)
         self.messenger.log_msg_trace(msg, f"SUB iteration from {self.subject}")
-        meta, data = self.messenger.split_msg(msg)
+        data, meta = self.messenger.split_msg(msg)
         return data
 
     async def open(self) -> None:
@@ -398,30 +398,30 @@ class MsgSubscription(MsgSubject):
 
 
 async def get_publisher(subject) -> MsgPublisher:
-    """Returns a publisher for a given topic
+    """Returns a publisher for a given subject
 
     Args:
-        subject (str): topic to publish to
+        subject (str): subject to publish to
 
     Returns:
-        Publisher: a publisher for the given topic
+        Publisher: a publisher for the given subject
 
     """
     return Messenger.get_publisher(subject)
 
 
-async def get_subscription(topic, queue=None, durable=None, **kwargs) -> MsgSubscription:
-    """Returns a subscription for a given topic, manages single subscription
+async def get_subscription(subject, queue=None, durable_name=None, **kwargs) -> MsgSubscription:
+    """Returns a subscription for a given subject, manages single subscription
 
     Args:
-        topic (str): topic to subscribe to
-        queue (str): queue name, if None, topic is used
-        durable (str): durable name, if None, queue is used
+        subject (str): subject to subscribe to
+        queue (str): queue name, if None, subject is used
+        durable_name (str): durable name, if None, queue is used
         kwargs: additional arguments to pass to the connection
 
     Returns:
-        Subscriber: a subscriber for the given topic
+        Subscriber: a subscriber for the given subject
 
     """
-    return Messenger.get_subscription(topic, queue=queue, durable=durable, **kwargs)
+    return Messenger.get_subscription(subject, queue=queue, durable_name=durable_name, **kwargs)
 

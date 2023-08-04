@@ -54,8 +54,8 @@ async def test_messenger_pub_sub():
 
     async def subsciber_task(sub):
         async for msg in sub:
-            print(msg.data)
-            if msg.data['final']:
+            print(msg)
+            if msg['final']:
                 break
 
     async def publisher_task(pub):
@@ -66,8 +66,8 @@ async def test_messenger_pub_sub():
 
     async with Messenger().context(host='localhost', port=4222):
         await asyncio.gather(subsciber_task(sub), publisher_task(pub))
-    await pub.close()
-    await sub.close()
+        await pub.close()
+        await sub.close()
 #
 # @pytest.mark.asyncio  # This tells pytest this test is async
 # @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")

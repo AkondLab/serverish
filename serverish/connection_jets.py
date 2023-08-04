@@ -33,7 +33,7 @@ class ConnectionJetStream(ConnectionNATS):
         Args:
             host (str): Hostname or IP address
             port (int): Port number
-            subject_prefix (str): Prefix for all topics
+            subject_prefix (str): Prefix for all subjects
             streams (Mapping[str, Mapping[str, Any]]):
                 JetStream streams to be created as mapping of stream name to stream parameters.
                 The stream parameters are described in the NATS documentation.
