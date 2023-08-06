@@ -209,8 +209,8 @@ class Messenger(Singleton):
         return MsgPublisher(subject=subject, parent=Messenger())
 
     @staticmethod
-    def get_subscription(subject: str, queue: str | None = None, durable_name: str | None = None, **kwargs) -> MsgSubscription:
-        """Returns a subscriber for a given subject
+    def get_reader(subject: str, queue: str | None = None, durable_name: str | None = None, **kwargs) -> MsgReader:
+        """Returns a reader for a given subject
 
         Args:
             subject (str): subject to subscribe to
@@ -218,15 +218,20 @@ class Messenger(Singleton):
             durable_name (str): durable name, if None, queue is used
 
         Returns:
-            MsgSubscription: message subscriber
+            MsgReader: message subscriber
+
+        Usage:
+            reader = Messenger.get_reader('subject'):
+            async for msg in reader:
+                print(msg)
         """
-        return MsgSubscription(subject=subject, queue=queue, durable_name=durable_name, parent=Messenger(), **kwargs)
+        return MsgReader(subject=subject, queue=queue, durable_name=durable_name, parent=Messenger(), **kwargs)
 
 
 
 
 
-class MsgSubject(Manageable):
+class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
     """Message subject operator
 
@@ -263,7 +268,7 @@ class MsgSubject(Manageable):
         await self.close()
 
 
-class MsgPublisher(MsgSubject):
+class MsgPublisher(MsgDriver):
     async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
         """Publishes a message
 
@@ -292,7 +297,7 @@ class MsgPublisher(MsgSubject):
             raise e
         return msg
 
-class MsgSubscription(MsgSubject):
+class MsgReader(MsgDriver):
     queue: str = param.String(default=None, allow_None=True, doc="Queue name, if None, subject is used")
     durable_name: str = param.String(default=None, allow_None=True, doc="Durable name, if None, queue is used")
     deliver_policy: str = param.ObjectSelector(default='all',
@@ -336,7 +341,7 @@ class MsgSubscription(MsgSubject):
         msg = self.messenger.decode(bmsg.data)
         self.messenger.log_msg_trace(msg, f"SUB iteration from {self.subject}")
         data, meta = self.messenger.split_msg(msg)
-        return data
+        return data, meta
 
     async def open(self) -> None:
         if self.subscription is not None:
@@ -410,7 +415,7 @@ async def get_publisher(subject) -> MsgPublisher:
     return Messenger.get_publisher(subject)
 
 
-async def get_subscription(subject, queue=None, durable_name=None, **kwargs) -> MsgSubscription:
+async def get_reader(subject, queue=None, durable_name=None, **kwargs) -> MsgReader:
     """Returns a subscription for a given subject, manages single subscription
 
     Args:
@@ -420,8 +425,12 @@ async def get_subscription(subject, queue=None, durable_name=None, **kwargs) -> 
         kwargs: additional arguments to pass to the connection
 
     Returns:
-        Subscriber: a subscriber for the given subject
+        Subscriber: a reader for the given subject
+
+    Usage:
+        async for msg in get_reader("subject"):
+            print(msg)
 
     """
-    return Messenger.get_subscription(subject, queue=queue, durable_name=durable_name, **kwargs)
+    return Messenger.get_reader(subject, queue=queue, durable_name=durable_name, **kwargs)
 
