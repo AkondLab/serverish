@@ -28,9 +28,10 @@ class ConnectionNATS(Connection):
                          subject_prefix=subject_prefix,
                          **kwargs)
         self.add_check_methods(at_beginning=True,
-                               nats=self.diagnose_nats_connected,
+                               nats_op = self.diagnose_nats_server_op,
+                               nats_server = self.diagnose_nats_server_port,
+                               nats_connected=self.diagnose_nats_connected,
                                nats_init=self.diagnose_initialized,
-                               nats_server = self.diagnose_nats_server
                                )
 
     async def connect(self):
@@ -67,7 +68,6 @@ class ConnectionNATS(Connection):
             return Status.fail(msg='Not initialized')
         return Status.ok(msg='Initialized')
 
-
     async def diagnose_nats_connected(self) -> Status:
         """Diagnoses NATS connection
         Returns:
@@ -79,13 +79,27 @@ class ConnectionNATS(Connection):
             return Status.fail(msg='Not connected')
         return Status.ok(msg='Connected')
 
-    async def diagnose_nats_server(self) -> Status:
+    async def diagnose_nats_server_port(self) -> Status:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             s.connect((self.host, self.port))
             s.shutdown(socket.SHUT_RDWR)
-            return Status.ok(msg=f'Server is running at {self.host}:{self.port}')
+            return Status.ok(msg=f'Listening at {self.host}:{self.port}')
         except ConnectionRefusedError:
             return Status.fail(msg=f'Connection to {self.host}:{self.port} refused')
         finally:
             s.close()
+
+    async def diagnose_nats_server_op(self) -> Status:
+        if self.nc is None:
+            return Status.fail(msg='Not initialized')
+        if not self.nc.is_connected:
+            return Status.fail(msg='Not connected')
+        try:
+            await self.nc.publish('test.ping', b'')
+            return Status.ok(msg='Operational')
+        except Exception as e:
+            return Status.fail(msg=f'Not operational: {e}')
+
+
+

@@ -1,3 +1,5 @@
+"""Simple example of telemetry data publishing using serverish.Messenger"""
+
 import asyncio
 import time
 

@@ -1,3 +1,0 @@
-git clone https://github.com/AkondLab/serverish.git
-sudo ln -s /home/poweruser/src/serverish/docker/nats/nats.service /etc/systemd/system/
-
