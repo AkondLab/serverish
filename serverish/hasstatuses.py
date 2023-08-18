@@ -114,12 +114,15 @@ class HasStatuses(Manageable):
                 res.append(r)
         return {n: r for n, r in zip(self.check_methods.keys(), res)}
 
-    async def update_statuses(self) -> None:
+    async def update_statuses(self, no_deduce = False) -> None:
         """Updates statuses of the resource
+
+        Args:
+            no_deduce (bool, optional): If True, don't deduce statuses from other statuses. Defaults to False.
 
         Calls diagnose() and sets statuses
         """
-        statuses = await self.diagnose()
+        statuses = await self.diagnose(no_deduce=no_deduce)
         for n, s in statuses.items():
             self.set_status(n, s)
 
