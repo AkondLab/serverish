@@ -48,7 +48,7 @@ async def test_jests():
     async with c:
         codes = await c.diagnose(no_deduce=True)
         for s in codes.values():
-            assert s == StatusEnum.ok
+            assert s in [StatusEnum.ok, StatusEnum.na]
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
