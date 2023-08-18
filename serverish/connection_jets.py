@@ -52,17 +52,20 @@ class ConnectionJetStream(ConnectionNATS):
                          subject_prefix=subject_prefix,
                          **kwargs)
         self.add_check_methods(at_beginning=True,
-                               jets_config=self.diagnose_stream_config,
+                               # jets_config=self.diagnose_stream_config,
                                jets_subjects=self.diagnose_stream_subjects,
                                jets_strem=self.diagnose_stream_exists,
-                               jets_connected=self.diagnose_jetstream_connected,
+                               jets_init=self.diagnose_jetstream_init,
                                )
 
-    async def connect(self):
+    async def connect(self, **kwargs):
         """Connects to JetStream of the NATS server
         """
-        await super().connect()
+
+        await super().connect(**kwargs)
         nc: nats.NATS | None = self.nc
+        if nc is None:
+            return
         self.js = nc.jetstream()
 
         # Persist messages on 'foo's subject.
@@ -78,6 +81,8 @@ class ConnectionJetStream(ConnectionNATS):
                 await self.js.add_stream(name=stream, **params)
             except Exception as e:
                 logger.error(f"Error creating stream {stream}: {e}")
+
+        await self.update_statuses()
 
 
     async def ensure_subject_in_stream(self, stream: str, subject: str,
@@ -142,12 +147,12 @@ class ConnectionJetStream(ConnectionNATS):
         try:
             for s in self.streams:
                 if re.match(r'^[a-zA-Z0-9_-]+$', s) is None:
-                    return Status.fail(msg=f'Invalid stream name {s}')
+                    return Status.new_fail(msg=f'Invalid stream name {s}')
         except TypeError:
-            return Status.fail(msg='Streams config invalid, can not iterate over it')
-        return Status.ok(msg='Streams config valid')
+            return Status.new_fail(msg='Streams config invalid, can not iterate over it')
+        return Status.new_ok(msg='Streams config valid', deduce_other=False)
 
-    async def diagnose_jetstream_connected(self) -> Status:
+    async def diagnose_jetstream_init(self) -> Status:
         """Diagnoses JetStream connection
 
         Returns:
@@ -155,9 +160,9 @@ class ConnectionJetStream(ConnectionNATS):
         """
         js: JetStreamContext = self.js
         if js is None:
-            return Status.fail(msg='Not initialized')
+            return Status.new_fail(msg='Not initialized')
         else:
-            return Status.ok(msg='Initialized')
+            return Status.new_ok(msg='Initialized', deduce_other=False)
 
     async def diagnose_stream_exists(self) -> Status:
         """Diagnoses any stream existence
@@ -167,14 +172,14 @@ class ConnectionJetStream(ConnectionNATS):
         """
         js: JetStreamContext = self.js
         if js is None:
-            return Status.fail(msg='Not initialized')
+            return Status.new_fail(msg='Not initialized')
         try:
-            info = js.streams_info()
+            info = await js.streams_info()
             if not info:
-                return Status.fail(msg='Zero streams in NATS')
+                return Status.new_fail(msg='Zero streams in NATS')
         except Exception as e:
-            return Status.fail(msg=f'Error getting streams info: {e}')
-        return Status.ok(msg='Stream(s) exist')
+            return Status.new_fail(msg=f'Error getting streams info: {e}')
+        return Status.new_ok(msg='Stream(s) exist')
 
     async def diagnose_stream_subjects(self) -> Status:
         """Diagnoses streams for declared subjects
@@ -184,15 +189,15 @@ class ConnectionJetStream(ConnectionNATS):
         """
         js: JetStreamContext = self.js
         if js is None:
-            return Status.fail(msg='Not initialized')
+            return Status.new_fail(msg='Not initialized')
         if not self.declared_subjects:
-            return Status.na(msg='No declared subjects')
+            return Status.new_na(msg='No declared subjects')
         try:
             for subject in self.declared_subjects:
                 try:
                     await js.find_stream_name_by_subject(subject)
                 except (LookupError, TypeError) as e:  # That's what nats.py throws...
-                    return Status.fail(msg=f'Stream for {subject} not found')
+                    return Status.new_fail(msg=f'Stream for {subject} not found')
         except Exception as e:
-            return Status.fail(msg=f'Error getting streams info: {e}')
-        return Status.ok(msg='All declared subjects have streams')
+            return Status.new_fail(msg=f'Error getting streams info: {e}')
+        return Status.new_ok(msg='All declared subjects have streams')

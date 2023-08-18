@@ -7,7 +7,7 @@ import param
 
 from serverish.collector import Collector
 from serverish.manageable import Manageable
-from serverish.status import Status
+from serverish.status import Status, StatusEnum
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -24,7 +24,7 @@ class HasStatuses(Manageable):
     @staticmethod
     async def diagnose_dummy_ok() -> Status:
         """Dummy diagnosis, returns StatusEnum.ok"""
-        return Status.ok(msg='Dummy OK')
+        return Status.new_ok(msg='Dummy OK')
 
     status = param.Dict(default=None, allow_None=True, doc='A dictionary to hold status information')
 
@@ -105,10 +105,10 @@ class HasStatuses(Manageable):
             deduced_name: str | None = None
             for n, m in self.check_methods.items():
                 if deduced_status is not None:
-                    r = Status.deduced(deduced_status, f'{n} deduced from {deduced_name}')
+                    r = Status.deduced(deduced_status, f'Deduced from {deduced_name}')
                 else:
                     r = await m()
-                    if r == 'ok' or r == 'na':
+                    if r.deduce_other:
                         deduced_status = r
                         deduced_name = n
                 res.append(r)
@@ -122,3 +122,22 @@ class HasStatuses(Manageable):
         statuses = await self.diagnose()
         for n, s in statuses.items():
             self.set_status(n, s)
+
+    def point_of_failure(self) -> (str | None, Status | None):
+        """Returns the most low-level failed status - most probably the point of failure
+
+        Returns:
+            (str, Status): Name and status of the most low-level failed status
+        """
+
+        for k, s in reversed(self.status.items()):
+            if s == StatusEnum.fail:
+                return k, s
+        return None, None
+
+    def format_status(self) -> str:
+        n, s = self.point_of_failure()
+        if s is None:
+            return 'OK'
+        else:
+            return f'Failed {n} ({s.msg})'

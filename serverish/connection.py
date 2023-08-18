@@ -41,17 +41,17 @@ class Connection(HasStatuses):
             Status: Status object, named 'dns'
         """
         if self.is_ip():
-            return Status.na(msg='IP address, skipping DNS check')
+            return Status.new_na(msg='IP address, skipping DNS check')
         resolver = aiodns.DNSResolver()
         try:
             await resolver.gethostbyname(self.host, socket.AF_INET)
         except aiodns.error.DNSError as e:
             try:
-                return Status.fail(msg=f'{self.host}: {e.args[1]}')
+                return Status.new_fail(msg=f'{self.host}: {e.args[1]}')
             except (IndexError, TypeError, AttributeError):
-                return Status.fail(msg=f'{self.host}: {e}')
+                return Status.new_fail(msg=f'{self.host}: {e}')
 
-        return Status.ok(msg=f'DNS name {self.host} resolved')
+        return Status.new_ok(msg=f'DNS name {self.host} resolved')
 
     async def diagnose_ping(self) -> Status:
         """Diagnoses ping
@@ -65,9 +65,9 @@ class Connection(HasStatuses):
             stderr=asyncio.subprocess.PIPE)
         _stdout, _stderr = await proc.communicate()
         if proc.returncode == 0:
-            return Status.ok(msg=f'ping {self.host} successful')
+            return Status.new_ok(msg=f'ping {self.host} successful')
         else:
-            return Status.fail(msg=f'ping {self.host} failed')
+            return Status.new_fail(msg=f'ping {self.host} failed')
 
     # async def diagnose_dns2(self) -> dict[str, Status]:
     #

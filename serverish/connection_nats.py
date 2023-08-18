@@ -1,5 +1,5 @@
+import logging
 import socket
-from typing import Sequence
 
 import param
 
@@ -7,6 +7,8 @@ from nats.aio.client import Client as NATS
 
 from serverish.connection import Connection
 from serverish.status import Status
+
+_logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 
 class ConnectionNATS(Connection):
@@ -29,12 +31,32 @@ class ConnectionNATS(Connection):
                          **kwargs)
         self.add_check_methods(at_beginning=True,
                                nats_op = self.diagnose_nats_server_op,
-                               nats_server = self.diagnose_nats_server_port,
                                nats_connected=self.diagnose_nats_connected,
                                nats_init=self.diagnose_initialized,
+                               nats_server = self.diagnose_nats_server_port,
                                )
 
-    async def connect(self):
+    async def nats_error_cb(self, e: Exception):
+        """Error callback for NATS connection"""
+        await self.update_statuses()
+        _logger.error(f'NATS error: {e}, Status: {self.format_status()}')
+
+    async def nats_disconnected_cb(self):
+        """Disconnected callback for NATS connection"""
+        await self.update_statuses()
+        _logger.error(f'NATS disconnected: Status: {self.format_status()}')
+
+    async def nats_reconnected_cb(self):
+        """Reconnected callback for NATS connection"""
+        await self.update_statuses()
+        _logger.warning(f'NATS reconnected: Status: {self.format_status()}')
+
+    async def nats_closed_cb(self):
+        """Closed callback for NATS connection"""
+        await self.update_statuses()
+        _logger.warning(f'NATS closed: Status: {self.format_status()}')
+
+    async def connect(self, **kwargs):
         """Connects to NATS server
 
         This method is not obligatory, one can just set self.nc to a connected NATS object,
@@ -42,7 +64,37 @@ class ConnectionNATS(Connection):
         """
         if self.nc is None:
             self.nc = NATS()
-        await self.nc.connect(servers=[f'nats://{self.host}:{self.port}'])
+
+        # prepare some our-default options for connect
+        async def cb_nats_error_relay(e):
+            await self.nats_error_cb(e)
+
+        async def cb_nats_disconnected_relay():
+            await self.nats_disconnected_cb()
+
+        async def cb_nats_reconnected_relay():
+            await self.nats_reconnected_cb()
+
+        async def cb_nats_closed_relay():
+            await self.nats_closed_cb()
+
+
+        kwargs.setdefault('error_cb', cb_nats_error_relay)
+        kwargs.setdefault('disconnected_cb', cb_nats_disconnected_relay)
+        kwargs.setdefault('reconnected_cb', cb_nats_reconnected_relay)
+        kwargs.setdefault('closed_cb', cb_nats_closed_relay)
+        kwargs.setdefault('name', 'serverish')
+
+        kwargs.setdefault('max_reconnect_attempts', -1)
+
+        try:
+            await self.nc.connect(servers=[f'nats://{self.host}:{self.port}'], **kwargs)
+        except Exception as e:
+            _logger.error(f'NATS connection failed: {e}')
+            self.nc = None
+            raise e
+        finally:
+            await self.update_statuses()
 
     async def disconnect(self):
         """Disconnects from NATS server"""
@@ -65,8 +117,8 @@ class ConnectionNATS(Connection):
             Status: Status object
         """
         if self.nc is None:
-            return Status.fail(msg='Not initialized')
-        return Status.ok(msg='Initialized')
+            return Status.new_fail(msg='Not initialized')
+        return Status.new_ok(msg='Initialized', deduce_other=False)
 
     async def diagnose_nats_connected(self) -> Status:
         """Diagnoses NATS connection
@@ -74,32 +126,32 @@ class ConnectionNATS(Connection):
             Status: Status object, named 'nats'
         """
         if self.nc is None:
-            return Status.fail(msg='Not initialized')
+            return Status.new_fail(msg='Not initialized')
         if not self.nc.is_connected:
-            return Status.fail(msg='Not connected')
-        return Status.ok(msg='Connected')
+            return Status.new_fail(msg='Not connected')
+        return Status.new_ok(msg='Connected')
 
     async def diagnose_nats_server_port(self) -> Status:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             s.connect((self.host, self.port))
             s.shutdown(socket.SHUT_RDWR)
-            return Status.ok(msg=f'Listening at {self.host}:{self.port}')
+            return Status.new_ok(msg=f'Listening at {self.host}:{self.port}')
         except ConnectionRefusedError:
-            return Status.fail(msg=f'Connection to {self.host}:{self.port} refused')
+            return Status.new_fail(msg=f'Connection to {self.host}:{self.port} refused')
         finally:
             s.close()
 
     async def diagnose_nats_server_op(self) -> Status:
         if self.nc is None:
-            return Status.fail(msg='Not initialized')
+            return Status.new_fail(msg='Not initialized')
         if not self.nc.is_connected:
-            return Status.fail(msg='Not connected')
+            return Status.new_fail(msg='Not connected')
         try:
             await self.nc.publish('test.ping', b'')
-            return Status.ok(msg='Operational')
+            return Status.new_ok(msg='Operational')
         except Exception as e:
-            return Status.fail(msg=f'Not operational: {e}')
+            return Status.new_fail(msg=f'Not operational: {e}')
 
 
 

@@ -29,58 +29,72 @@ class StatusEnum(StrEnum):
 @dataclass
 class Status:
     """Status of the resource
+
+    Attributes:
+        status (StatusEnum): Status
+        msg (str): Status message
+        deduce_other (bool): Whether to deduce other statuses without checking from this one
     """
     status: StatusEnum = StatusEnum.na
     msg: str = None
+    deduce_other: bool = True
 
     # Helpers for easy status construction
     @classmethod
-    def na(cls, msg: str = None):
+    def new_na(cls, msg: str = None, deduce_other: bool = False) -> Status:
         """Returns Status object with status 'na' (not applicable)
 
         Args:
             msg (str, optional): Status message. Defaults to None.
+            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
+                                           Defaults to False.
 
         Returns:
             Status: Status object
         """
-        return cls(StatusEnum.na, msg)
+        return cls(StatusEnum.na, msg, deduce_other=deduce_other)
 
     @classmethod
-    def ok(cls, msg: str = None):
+    def new_ok(cls, msg: str = None, deduce_other: bool = True) -> Status:
         """Returns Status object with status 'ok'
 
         Args:
             msg (str, optional): Status message. Defaults to None.
+            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
+                                           Defaults to True.
 
         Returns:
             Status: Status object
         """
-        return cls(StatusEnum.ok, msg)
+        return cls(StatusEnum.ok, msg, deduce_other=deduce_other)
 
     @classmethod
-    def fail(cls,  msg: str = None):
+    def new_fail(cls, msg: str = None, deduce_other: bool = False) -> Status:
         """Returns Status object with status 'fail'
 
         Args:
             msg (str, optional): Status message. Defaults to None.
+            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
+                                           Defaults to False.
 
         Returns:
             Status: Status object
         """
-        return cls(StatusEnum.fail, msg)
+        return cls(StatusEnum.fail, msg, deduce_other=deduce_other)
 
     @classmethod
-    def disabled(cls, msg: str = None):
+    def new_disabled(cls, msg: str = None, deduce_other: bool = False) -> Status:
         """Returns Status object with status 'disabled'
 
         Args:
             msg (str, optional): Status message. Defaults to None.
+            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
+                                           Defaults to False.
 
         Returns:
             Status: Status object
         """
-        return cls(StatusEnum.disabled, msg)
+        return cls(StatusEnum.disabled, msg, deduce_other=deduce_other)
 
     @classmethod
     def deduced(cls, source: Status, msg: str = None):
@@ -89,6 +103,8 @@ class Status:
         Args:
             source (Status): Source status
             msg (str, optional): Status message. Defaults to 'Deduced form {src.name}'.
+            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
+                                           Defaults to False.
 
         Returns:
             Status: Status object
