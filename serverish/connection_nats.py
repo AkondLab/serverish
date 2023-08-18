@@ -139,6 +139,8 @@ class ConnectionNATS(Connection):
             return Status.new_ok(msg=f'Listening at {self.host}:{self.port}')
         except ConnectionRefusedError:
             return Status.new_fail(msg=f'Connection to {self.host}:{self.port} refused')
+        except Exception as e:
+            return Status.new_fail(msg=f'Error: {e}')
         finally:
             s.close()
 
