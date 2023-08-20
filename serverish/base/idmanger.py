@@ -1,6 +1,6 @@
 import logging
 
-from serverish.singleton import Singleton
+from serverish.base.singleton import Singleton
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 

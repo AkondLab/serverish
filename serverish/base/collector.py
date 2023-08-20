@@ -1,7 +1,6 @@
 import logging
-from dataclasses import dataclass
 
-from serverish.manageable import Manageable
+from serverish.base.manageable import Manageable
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 

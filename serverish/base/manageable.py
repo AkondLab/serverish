@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import param
 
 if TYPE_CHECKING:
-    from serverish.collector import Collector
+    from serverish.base.collector import Collector
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 

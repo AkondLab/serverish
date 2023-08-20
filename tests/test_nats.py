@@ -1,14 +1,11 @@
 import asyncio
-import os
 
 import pytest
 import socket
 
-
-from serverish.connection import Connection
-from serverish.connection_jets import ConnectionJetStream
-from serverish.connection_nats import ConnectionNATS
-from serverish.status import StatusEnum
+from serverish.connection.connection_jets import ConnectionJetStream
+from serverish.connection.connection_nats import ConnectionNATS
+from serverish.base.status import StatusEnum
 from tests.test_connection import ci
 
 

@@ -8,7 +8,7 @@ import param
 from nats.aio.client import Client as NATS
 
 from serverish.connection import Connection
-from serverish.status import Status
+from serverish.base.status import Status
 
 _logger = logging.getLogger(__name__.rsplit('.')[-1])
 

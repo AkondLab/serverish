@@ -55,7 +55,7 @@ class DataValidator(DictValidator):
 
     def _load_schema(self, schema_dir: str | Path | None, schema_file: str) -> str:
         if schema_dir is None:
-            p = importlib.resources.files(__package__) / 'schema'
+            p = importlib.resources.files(__package__) / '..' / 'schema'
         else:
             p = Path(schema_dir)
 

@@ -1,4 +1,4 @@
-from serverish.status import Status, StatusEnum
+from serverish.base.status import Status, StatusEnum
 
 
 def test_equal_Status():

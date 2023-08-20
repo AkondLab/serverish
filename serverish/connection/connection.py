@@ -7,8 +7,8 @@ from typing import Iterable
 import aiodns
 import param
 
-from serverish.hasstatuses import HasStatuses
-from serverish.status import Status
+from serverish.base.hasstatuses import HasStatuses
+from serverish.base.status import Status
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 

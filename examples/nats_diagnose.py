@@ -2,7 +2,7 @@
 
 import asyncio
 
-from serverish.connection_jets import ConnectionJetStream
+from serverish.connection.connection_jets import ConnectionJetStream
 
 
 def print_status(d):

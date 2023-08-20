@@ -3,12 +3,7 @@ import datetime
 import logging
 
 import pytest
-import socket
 
-
-from serverish.connection import Connection
-from serverish.connection_jets import ConnectionJetStream
-from serverish.connection_nats import ConnectionNATS
 from serverish.messenger import Messenger, get_publisher, get_reader
 from tests.test_connection import ci
 from tests.test_nats import is_nats_running, ensure_stram_for_tests

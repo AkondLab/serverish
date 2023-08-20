@@ -24,12 +24,12 @@ from nats.js.api import DeliverPolicy, ConsumerConfig
 import nats.errors
 import nats.js.errors
 
-from serverish.collector import Collector
-from serverish.connection_jets import ConnectionJetStream
-from serverish.idmanger import gen_id
-from serverish.manageable import Manageable
-from serverish.msgvalidator import MsgValidator
-from serverish.singleton import Singleton
+from serverish.base.collector import Collector
+from serverish.connection.connection_jets import ConnectionJetStream
+from serverish.base.idmanger import gen_id
+from serverish.base.manageable import Manageable
+from serverish.messenger.msgvalidator import MsgValidator
+from serverish.base.singleton import Singleton
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
 

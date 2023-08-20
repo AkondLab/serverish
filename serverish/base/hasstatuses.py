@@ -5,9 +5,9 @@ from typing import Callable, Awaitable
 
 import param
 
-from serverish.collector import Collector
-from serverish.manageable import Manageable
-from serverish.status import Status, StatusEnum
+from serverish.base.collector import Collector
+from serverish.base.manageable import Manageable
+from serverish.base.status import Status, StatusEnum
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 

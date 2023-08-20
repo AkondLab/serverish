@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Sequence, Mapping, Any
+from typing import Mapping, Any
 import re
 
 import nats
 from nats.js import JetStreamContext
-from nats.errors import *
 import param
 
-from serverish.connection import Connection
-from serverish.connection_nats import ConnectionNATS
-from serverish.status import Status
+from serverish.connection.connection_nats import ConnectionNATS
+from serverish.base.status import Status
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 

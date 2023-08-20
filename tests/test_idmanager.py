@@ -1,5 +1,5 @@
 import unittest
-from serverish.idmanger import IdManager, gen_id
+from serverish.base.idmanger import gen_id
 
 class TestIdManager(unittest.TestCase):
     def test_gen_id(self):

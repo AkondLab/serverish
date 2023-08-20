@@ -5,7 +5,7 @@ import socket
 
 
 from serverish.connection import Connection
-from serverish.status import StatusEnum
+from serverish.base.status import StatusEnum
 
 
 def internet_on():

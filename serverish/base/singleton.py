@@ -1,9 +1,6 @@
-import logging
-
 from param.parameterized import ParameterizedMetaclass
 
-from serverish.collector import Collector
-from serverish.manageable import Manageable
+from serverish.base.collector import Collector
 
 
 class SingletonMeta(ParameterizedMetaclass):
