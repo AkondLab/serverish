@@ -56,5 +56,5 @@ if __name__ == '__main__':
     asyncio.run(diagnose_stream_config_with_statuses())
     print('Daignose result')
     asyncio.run(diagnose_stream_config_with_diagnose())
-    print('Continous checking of statuses (infinite loop Ctrl+C to stop)')
+    print('Continuous checking of statuses (infinite loop Ctrl+C to stop)')
     asyncio.run(diagnose_stream_config_in_loop())

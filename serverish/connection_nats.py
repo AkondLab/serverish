@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import socket
+from typing import Iterable, Tuple
 
 import param
 
@@ -16,8 +18,7 @@ class ConnectionNATS(Connection):
     subject_prefix = param.String(default='srvh')
     nc = param.ClassSelector(class_=NATS, allow_None=True)
 
-    def __init__(self,
-                 host: str, port: int = 4222,
+    def __init__(self, host: str|Iterable[str], port: int|Iterable[int] = 4222,
                  subject_prefix: str = 'srvh',
                  **kwargs):
         """Initializes connection watcher
@@ -88,7 +89,7 @@ class ConnectionNATS(Connection):
         kwargs.setdefault('max_reconnect_attempts', -1)
 
         try:
-            await self.nc.connect(servers=[f'nats://{self.host}:{self.port}'], **kwargs)
+            await self.nc.connect(servers=self.create_urls(protocol='nats'), **kwargs)
         except Exception as e:
             _logger.error(f'NATS connection failed: {e}')
             self.nc = None
@@ -132,17 +133,34 @@ class ConnectionNATS(Connection):
         return Status.new_ok(msg='Connected')
 
     async def diagnose_nats_server_port(self) -> Status:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.connect((self.host, self.port))
-            s.shutdown(socket.SHUT_RDWR)
-            return Status.new_ok(msg=f'Listening at {self.host}:{self.port}')
-        except ConnectionRefusedError:
-            return Status.new_fail(msg=f'Connection to {self.host}:{self.port} refused')
-        except Exception as e:
-            return Status.new_fail(msg=f'Error: {e}')
-        finally:
-            s.close()
+        async def _check_port(host, port) -> Tuple[str, str | None]:
+            loop = asyncio.get_event_loop()
+            try:
+                # Używamy loop.sock_connect do asynchronicznej operacji
+                await loop.sock_connect(socket.socket(socket.AF_INET, socket.SOCK_STREAM), (host, port))
+                return f"{host}:{port}", None
+            except ConnectionRefusedError:
+                return f"{host}:{port}", f'Connection to {host}:{port} refused'
+            except Exception as e:
+                return f"{host}:{port}", f'Error: {e}'
+
+        if len(self.host) == 0:
+            return Status.new_fail(msg='No host specified')
+
+        tasks = [_check_port(host, port) for host, port in zip(self.host, self.port)]
+        results = await asyncio.gather(*tasks)
+
+        successful_connections = [host_port for host_port, status in results if status is None]
+        failed_connections = [host_port for host_port, status in results if not status is not None]
+
+        if len(successful_connections) == len(tasks):
+            return Status.new_ok(msg=f'Connected on all {len(tasks)} addresses: {", ".join(successful_connections)}')
+        elif len(successful_connections) > 0:
+            return Status.new_ok(msg=f'Connected to {len(successful_connections)} of {len(tasks)}. '
+                                       f'Failed to connect to: {", ".join(failed_connections)}')
+        else:
+            return Status.new_fail(msg=f'Failed to connect to any of {len(tasks)} addresses: '
+                                       f'{", ".join(failed_connections)}')
 
     async def diagnose_nats_server_op(self) -> Status:
         if self.nc is None:
@@ -154,6 +172,8 @@ class ConnectionNATS(Connection):
             return Status.new_ok(msg='Operational')
         except Exception as e:
             return Status.new_fail(msg=f'Not operational: {e}')
+
+
 
 
 

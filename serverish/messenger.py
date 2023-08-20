@@ -41,8 +41,8 @@ class MsgData():
 class Messenger(Singleton):
     conn = param.ClassSelector(class_=ConnectionJetStream, default=None, allow_None=True, doc="Messenger Connection")
     validation = param.Boolean(default=True, doc="Validate messages against schema")
-    default_host = param.String(default='localhost', doc="Default NATS host name")
-    default_port = param.Integer(default=4222, doc="Default NATS port number")
+    default_host = param.List(default=['localhost'], item_type=str, doc="Default NATS host name(s)")
+    default_port = param.List(default=[4222], item_type=int, doc="Default NATS port number(s)")
 
     def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
         self.validator = MsgValidator()

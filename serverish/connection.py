@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import socket
+from typing import Iterable
 
 import aiodns
 import param
@@ -14,25 +15,46 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 class Connection(HasStatuses):
     """Watches IP connection and reports status"""
-    host = param.String()
-    port = param.Integer(default=80, bounds=(1, 65535))
+    host = param.List(default=['localhost'], item_type=str)
+    port = param.List(default=[80], item_type=int)
 
     regexp_ip: str = r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$'
     r_ip: re.Pattern = re.compile(regexp_ip)
 
-    def __init__(self, host: str, port: int, **kwargs):
+    def __init__(self, host: str|Iterable[str], port: int|Iterable[int], **kwargs):
         """Initializes connection watcher
 
         Args:
-            host (str): Hostname or IP address
-            port (int): Port number
+            host (str): Hostname or IP address, may be multiple
+            port (int): Port number, may be multiple
+
+        If both host and port are iterable, they must have same length.
+        If host is iterable and port is not, port is repeated for each host.
+        If port is iterable and host is not, host is repeated for each port.
         """
+        if isinstance(host, str):
+            host = [host]
+        else:
+            host = list(host)
+        if isinstance(port, int):
+            port = [port]
+        else:
+            port = list(port)
+        if len(host) == 1 and len(port) > 1:
+            host = host * len(port)
+        if len(port) == 1 and len(host) > 1:
+            port = port * len(host)
+        if len(host) != len(port):
+            raise ValueError(f'hosts and ports must have same length, got {len(host)} and {len(port)}')
+
         super().__init__(host=host, port=port, **kwargs)
         self.set_check_methods(ping=self.diagnose_ping, dns=self.diagnose_dns)
 
-    def is_ip(self) -> bool:
+    @classmethod
+    def is_ip(cls, host) -> bool:
         """Returns True if host is just IP address, not a hostname """
-        return bool(self.r_ip.match(self.host))
+        return bool(cls.r_ip.match(host))
+
 
     async def diagnose_dns(self) -> Status:
         """ Diagnoses DNS connection
@@ -40,18 +62,36 @@ class Connection(HasStatuses):
         Returns:
             Status: Status object, named 'dns'
         """
-        if self.is_ip():
-            return Status.new_na(msg='IP address, skipping DNS check')
-        resolver = aiodns.DNSResolver()
-        try:
-            await resolver.gethostbyname(self.host, socket.AF_INET)
-        except aiodns.error.DNSError as e:
-            try:
-                return Status.new_fail(msg=f'{self.host}: {e.args[1]}')
-            except (IndexError, TypeError, AttributeError):
-                return Status.new_fail(msg=f'{self.host}: {e}')
 
-        return Status.new_ok(msg=f'DNS name {self.host} resolved')
+        async def _resolve_host(resolver, h):
+            try:
+                await resolver.gethostbyname(h, socket.AF_INET)
+                return None
+            except aiodns.error.DNSError as e:
+                try:
+                    return f'{h}: {e.args[1]}'
+                except (IndexError, TypeError, AttributeError):
+                    return f'{h}: {e}'
+
+        if len(self.host) == 0:
+            return Status.new_na(msg='No hosts to check DNS for')
+
+        resolver = aiodns.DNSResolver()
+        tasks = [_resolve_host(resolver, h) for h in self.host if not self.is_ip(h)]
+        results = await asyncio.gather(*tasks)
+
+        checked = len(results)
+        failed = [res for res in results if res is not None]
+
+        if checked == 0:
+            return Status.new_na(msg='No DNS names to check')
+        elif len(failed) == checked:
+            return Status.new_fail(msg=f'DNS check failed for all {checked} names: {", ".join(failed)}')
+        elif len(failed) > 0:
+            return Status.new_ok(msg=f'DNS check ok for {checked - len(failed)} of {checked} names, '
+                                     f'but failed for: {", ".join(failed)}')
+        else:
+            return Status.new_ok(msg=f'DNS check ok for all {checked} names')
 
     async def diagnose_ping(self) -> Status:
         """Diagnoses ping
@@ -59,15 +99,44 @@ class Connection(HasStatuses):
         Returns:
             Status: Status object, named 'ping'
         """
-        proc = await asyncio.create_subprocess_exec(
-            'ping', '-c', '1', self.host,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE)
-        _stdout, _stderr = await proc.communicate()
-        if proc.returncode == 0:
-            return Status.new_ok(msg=f'ping {self.host} successful')
+
+        async def _ping_host(host):
+            proc = await asyncio.create_subprocess_exec(
+                'ping', '-c', '1', host,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE)
+            _stdout, _stderr = await proc.communicate()
+            return (host, proc.returncode)
+
+        if len(self.host) == 0:
+            return Status.new_na(msg='No hosts to ping')
+
+        tasks = [_ping_host(host) for host in self.host]
+        results = await asyncio.gather(*tasks)
+
+        successful_pings = [host for host, returncode in results if returncode == 0]
+        failed_pings = [host for host, returncode in results if returncode != 0]
+
+        if len(successful_pings) == len(self.host):
+            return Status.new_ok(msg=f'Ping successful for all hosts: {", ".join(successful_pings)}')
+        elif len(successful_pings) > 0:
+            return Status.new_ok(msg=f'Ping ok for {len(successful_pings)} of {len(self.host)} hosts, '
+                                     f'but failed for: {", ".join(failed_pings)}')
         else:
-            return Status.new_fail(msg=f'ping {self.host} failed')
+            return Status.new_fail(msg=f'Ping failed for all {len(self.host)} hosts: {", ".join(failed_pings)}')
+
+    def create_urls(self, protocol: str='http', path: str='') -> list[str]:
+        """Creates list of URLs from host and port
+
+        Args:
+            protocol (str): Protocol to use, default 'http'
+            path (str): Path to append to URL, default ''
+
+        Returns:
+            list[str]: List of URLs
+        """
+        return [f'{protocol}://{h}:{p}{path}' for h, p in zip(self.host, self.port)]
+
 
     # async def diagnose_dns2(self) -> dict[str, Status]:
     #

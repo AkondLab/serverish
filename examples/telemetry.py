@@ -24,7 +24,7 @@ port = 4222
 async def main1():
     msg = Messenger()
 
-    await msg.open(host, port)
+    await msg.open([msg.create_url(host, port)])
     await do()
     await msg.close()
 
@@ -32,7 +32,7 @@ async def main1():
 async def main2():
     msg = Messenger()
 
-    async with msg.context(host, port) as msg:
+    async with msg.context([msg.create_url(host, port)]) as msg:
         await do()
 
 
