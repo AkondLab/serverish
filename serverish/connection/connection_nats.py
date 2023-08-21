@@ -151,7 +151,7 @@ class ConnectionNATS(Connection):
         results = await asyncio.gather(*tasks)
 
         successful_connections = [host_port for host_port, status in results if status is None]
-        failed_connections = [host_port for host_port, status in results if not status is not None]
+        failed_connections = [host_port for host_port, status in results if status is not None]
 
         if len(successful_connections) == len(tasks):
             return Status.new_ok(msg=f'Connected on all {len(tasks)} addresses: {", ".join(successful_connections)}')
