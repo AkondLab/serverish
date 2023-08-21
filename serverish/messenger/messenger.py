@@ -14,15 +14,9 @@ import contextlib
 import logging
 import json
 import time
-from asyncio import Event
+from typing import TYPE_CHECKING
 
-import jsonschema
 import param
-
-from nats.aio.subscription import Subscription
-from nats.js.api import DeliverPolicy, ConsumerConfig
-import nats.errors
-import nats.js.errors
 
 from serverish.base.collector import Collector
 from serverish.connection.connection_jets import ConnectionJetStream
@@ -31,12 +25,18 @@ from serverish.base.manageable import Manageable
 from serverish.messenger.msgvalidator import MsgValidator
 from serverish.base.singleton import Singleton
 
+if TYPE_CHECKING:
+    from serverish.messenger.msg_publisher import MsgPublisher
+    from serverish.messenger.msg_reader import MsgReader
+
+
 log = logging.getLogger(__name__.rsplit('.')[-1])
 
 
-class MsgData():
+class MsgData:
     def __dir__(self) -> dict:
         return self.__dict__
+
 
 class Messenger(Singleton):
     conn = param.ClassSelector(class_=ConnectionJetStream, default=None, allow_None=True, doc="Messenger Connection")
@@ -94,7 +94,6 @@ class Messenger(Singleton):
             yield self
         finally:
             await self.close()
-
 
     @staticmethod
     def create_meta(meta: dict | None = None) -> dict:
@@ -162,10 +161,10 @@ class Messenger(Singleton):
         """
         data, meta = cls.split_msg(msg)
         ts = time.strftime("%Y-%m-%dT%H:%M:%S", tuple(meta.pop('ts')))
-        id = meta.pop('id')
+        id_ = meta.pop('id')
         smeta = ' '.join(f"{k}:{v}" for k, v in meta.items())
         sdata = json.dumps(data)
-        return f"{ts} {id} {smeta} data:{sdata[:100]}"
+        return f"{ts} {id_} {smeta} data:{sdata[:100]}"
 
     @classmethod
     def log_msg_trace(cls, msg: dict, comment: str) -> None:
@@ -197,7 +196,7 @@ class Messenger(Singleton):
         return json.loads(bdata.decode('utf-8'))
 
     @staticmethod
-    def get_publisher(subject: str) -> MsgPublisher:
+    def get_publisher(subject: str) -> "MsgPublisher":
         """Returns a publisher for a given subject
 
         Args:
@@ -206,10 +205,11 @@ class Messenger(Singleton):
         Returns:
             MsgPublisher: message publisher
         """
+        from serverish.messenger.msg_publisher import MsgPublisher
         return MsgPublisher(subject=subject, parent=Messenger())
 
     @staticmethod
-    def get_reader(subject: str, queue: str | None = None, durable_name: str | None = None, **kwargs) -> MsgReader:
+    def get_reader(subject: str, queue: str | None = None, durable_name: str | None = None, **kwargs) -> 'MsgReader':
         """Returns a reader for a given subject
 
         Args:
@@ -225,10 +225,8 @@ class Messenger(Singleton):
             async for msg in reader:
                 print(msg)
         """
+        from serverish.messenger.msg_reader import MsgReader
         return MsgReader(subject=subject, queue=queue, durable_name=durable_name, parent=Messenger(), **kwargs)
-
-
-
 
 
 class MsgDriver(Manageable):
@@ -254,7 +252,6 @@ class MsgDriver(Manageable):
     def connection(self) -> ConnectionJetStream:
         return self.messenger.connection
 
-
     async def open(self) -> None:
         pass
 
@@ -266,170 +263,3 @@ class MsgDriver(Manageable):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.close()
-
-
-class MsgPublisher(MsgDriver):
-    async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
-        """Publishes a message
-
-        Args:
-            data (dict): message data
-            kwargs: additional arguments to pass to the connection
-
-        """
-        msg = self.messenger.create_msg(data, meta)
-        bdata = self.messenger.encode(msg)
-        try:
-            self.messenger.msg_validate(msg)
-        except jsonschema.ValidationError as e:
-            log.error(f"Message {msg['meta']['id']} validation error: {e}")
-            raise e
-        self.messenger.log_msg_trace(msg, f"PUB to {self.subject}")
-        try:
-            await self.connection.js.publish(self.subject, bdata, **kwargs)
-        except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError):
-            # it's OK, we just don't have subscribers yet
-            pass
-        except Exception as e:
-            log.error(f"Trying to publish to subject '{self.subject}' failed. "
-                      f"Message {msg['meta']['id']} publish error: {e}")
-            raise e
-        return msg
-
-class MsgReader(MsgDriver):
-    queue: str = param.String(default=None, allow_None=True, doc="Queue name, if None, subject is used")
-    durable_name: str = param.String(default=None, allow_None=True, doc="Durable name, if None, queue is used")
-    deliver_policy: str = param.ObjectSelector(default='all',
-                                               objects=['all', 'last', 'new',
-                                                        'by_start_sequence',
-                                                        'by_start_time',
-                                                        'last_per_subject'
-                                                        ],
-                                               doc="Delivery policy, for underlying JetStream subscription")
-    opt_start_time = param.Date(default=None, allow_None=True,
-                                                          doc="Start time, for underlying JetStream subscription")
-    opt_start_seq: int | None = param.Integer(default=None, allow_None=True,
-                                              doc="Start sequence, for underlying JetStream subscription")
-
-    def __init__(self, **kwargs) -> None:
-        self.subscription: Subscription | None = None
-        self._stop: Event = Event()
-        super().__init__(**kwargs)
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self.subscription is None:
-            await self.open()
-
-        while True:
-            if self._stop.is_set():
-                await self.close()
-                raise StopAsyncIteration
-            try:
-                bmsg = await self.subscription.next_msg()
-                break
-            except nats.errors.TimeoutError:
-                pass  # keep iterating  # TODO: Consider transformation for push based when stream gets empty
-            except Exception as e:
-                log.error(f"During interation on {self}, subscription.next_msg raised {e}")
-                await self.close()
-                raise e
-
-        msg = self.messenger.decode(bmsg.data)
-        self.messenger.log_msg_trace(msg, f"SUB iteration from {self.subject}")
-        data, meta = self.messenger.split_msg(msg)
-        return data, meta
-
-    async def open(self) -> None:
-        if self.subscription is not None:
-            raise RuntimeError("Subscription already open, do not reuse MsgSubscription instances")
-
-        js = self.connection.js
-
-        # Convert the delivery policy from a string to the appropriate DeliverPolicy enum
-        deliver_policy_enum = DeliverPolicy(self.deliver_policy)
-
-        # from_time handling:
-        if self.opt_start_time is None:
-            opt_start_time = None
-        else:
-            opt_start_time = self.opt_start_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
-        # Create the consumer configuration
-        consumer_conf = ConsumerConfig(
-            deliver_policy=deliver_policy_enum,
-            opt_start_time=opt_start_time,
-            opt_start_seq=self.opt_start_seq,
-            durable_name=self.durable_name,
-        )
-
-        # Return a new Subscription
-        self.subscription = await js.subscribe(self.subject, queue=self.queue, config=consumer_conf)
-
-    async def close(self) -> None:
-        if self.subscription is not None:
-            await self.subscription.unsubscribe()
-            self.subscription = None
-        else:
-            raise RuntimeError("Subscription already closed")
-
-    async def drain(self, timeout: float = 0.0) -> None:
-        """Drains the subscription, returns when no more messages are available
-
-        Should not be called from within an iteration (use stop instead)
-
-        Args:
-            timeout (float): timeout in seconds
-
-        """
-        if self.subscription is None:
-            raise RuntimeError("Subscription not open")
-
-        await self.subscription.drain()
-        self.stop()
-
-    def stop(self) -> None:
-        """Stops the subscription, returns immediately
-
-        """
-        if self.subscription is None:
-            raise RuntimeError("Subscription not open")
-
-        self._stop.set()
-
-
-
-async def get_publisher(subject) -> MsgPublisher:
-    """Returns a publisher for a given subject
-
-    Args:
-        subject (str): subject to publish to
-
-    Returns:
-        Publisher: a publisher for the given subject
-
-    """
-    return Messenger.get_publisher(subject)
-
-
-async def get_reader(subject, queue=None, durable_name=None, **kwargs) -> MsgReader:
-    """Returns a subscription for a given subject, manages single subscription
-
-    Args:
-        subject (str): subject to subscribe to
-        queue (str): queue name, if None, subject is used
-        durable_name (str): durable name, if None, queue is used
-        kwargs: additional arguments to pass to the connection
-
-    Returns:
-        Subscriber: a reader for the given subject
-
-    Usage:
-        async for msg in get_reader("subject"):
-            print(msg)
-
-    """
-    return Messenger.get_reader(subject, queue=queue, durable_name=durable_name, **kwargs)
-
