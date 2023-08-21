@@ -83,7 +83,7 @@ async def test_nats_publish():
 @pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_js_publish_subscribe():
-    await ensure_stram_for_tests('srvh-test', 'srvh.test.js.foo1')
+    # await ensure_stram_for_tests('test', 'test.js.foo1')
 
     message_received = asyncio.Event()
     received_messages = []
@@ -94,8 +94,8 @@ async def test_js_publish_subscribe():
 
     c = ConnectionJetStream(host='localhost', port=4222)
     async with c:
-        await c.js.publish('srvh.test.js.foo1', b'Hello OCA!')
-        await c.js.subscribe("srvh.test.js.foo1", cb=message_handler, deliver_policy='last')
+        await c.js.publish('test.js.foo1', b'Hello OCA!')
+        await c.js.subscribe("test.js.foo1", cb=message_handler, deliver_policy='last')
         try:
             await asyncio.wait_for(message_received.wait(), timeout=1)
         except asyncio.TimeoutError:
@@ -108,7 +108,7 @@ async def test_js_publish_subscribe():
 @pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_js_subscribe_publish():
-    await ensure_stram_for_tests('srvh-test', 'srvh.test.js.foo1')
+    # await ensure_stram_for_tests('srvh-test', 'test.js.foo1')
 
     message_received = asyncio.Event()
     received_messages = []
@@ -119,8 +119,8 @@ async def test_js_subscribe_publish():
 
     c = ConnectionJetStream(host='localhost', port=4222)
     async with c:
-        await c.js.subscribe("srvh.test.js.foo1", cb=message_handler, deliver_policy='new')
-        await c.js.publish('srvh.test.js.foo1', b'Hello OCA!')
+        await c.js.subscribe("test.js.test_js_subscribe_publish", cb=message_handler, deliver_policy='new')
+        await c.js.publish('test.js.test_js_subscribe_publish', b'Hello OCA!')
         try:
             await asyncio.wait_for(message_received.wait(), timeout=1)
         except asyncio.TimeoutError:

@@ -287,10 +287,9 @@ class MsgPublisher(MsgDriver):
         self.messenger.log_msg_trace(msg, f"PUB to {self.subject}")
         try:
             await self.connection.js.publish(self.subject, bdata, **kwargs)
-        except nats.js.errors.NoStreamResponseError as e:
-            log.error(f"Trying to publish to subject '{self.subject}' which may be not in stream: "
-                      f"Message {msg['meta']['id']} publish error: {e}")
-            raise e
+        except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError):
+            # it's OK, we just don't have subscribers yet
+            pass
         except Exception as e:
             log.error(f"Trying to publish to subject '{self.subject}' failed. "
                       f"Message {msg['meta']['id']} publish error: {e}")

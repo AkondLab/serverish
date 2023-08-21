@@ -31,7 +31,7 @@ async def test_js_strem_good_name():
     nc = await nats.connect("localhost")
     js = nc.jetstream()
     try:
-        await js.add_stream(name="test-str2", subjects=["fooxxx"])
+        await js.add_stream(name="test-goodnametest", subjects=["fooxxx"])
     except nats.errors.Error as e:
         pytest.fail(f"Error should not have been raised on stream creation {e}")
     finally:
