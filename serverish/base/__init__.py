@@ -1,1 +1,1 @@
-from status import Status, StatusEnum
+from .status import Status, StatusEnum
