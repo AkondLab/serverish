@@ -1,3 +1,4 @@
+import logging
 import asyncio
 import datetime
 import logging
@@ -62,6 +63,40 @@ async def test_messenger_pub_sub():
         await pub.close()
         await sub.close()
 
+@pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_messenger_pub_then_sub():
+
+    now = datetime.datetime.now()
+    pub = await get_publisher('test.messenger.test_messenger_pub_then_sub')
+    sub = await get_reader('test.messenger.test_messenger_pub_then_sub',
+                           deliver_policy='all',
+                           # deliver_policy='by_start_time',
+                           # opt_start_time=now,
+                           )
+
+    async def subsciber_task(sub):
+        async for data, meta in sub:
+            print(data)
+            if data['final']:
+                break
+
+    async def publisher_task(pub):
+        meta = {'trace_level': logging.WARN}
+
+        for i in range(10):
+            await pub.publish(data={'n': i, 'final': False}, meta=meta)
+            await asyncio.sleep(0.1)
+        await pub.publish(data={'n': 10, 'final': True}, meta=meta)
+
+    async with Messenger().context(host='localhost', port=4222):
+        await publisher_task(pub)
+        await asyncio.sleep(0.1)
+        await subsciber_task(sub)
+        await pub.close()
+        await sub.close()
+
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
@@ -81,12 +116,13 @@ async def test_messenger_pub_sub_pub():
                 break
 
     async def publisher_task(pub, finalize=False):
+        meta = {'trace_level': logging.WARN}
         await asyncio.sleep(0.1)
         for i in range(10):
-            await pub.publish(data={'n': i, 'final': False})
+            await pub.publish(data={'n': i, 'final': False}, meta=meta)
             await asyncio.sleep(0.1)
         if finalize:
-            await pub.publish(data={'n': 10, 'final': True})
+            await pub.publish(data={'n': 10, 'final': True}, meta=meta)
 
     async with Messenger().context(host='localhost', port=4222):
         await publisher_task(pub, finalize=False) # pre-publish 10

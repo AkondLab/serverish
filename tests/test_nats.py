@@ -70,8 +70,8 @@ async def test_nats_publish():
 
     c = ConnectionNATS(host='localhost', port=4222)
     async with c:
-        await c.nc.subscribe("test.serverish.foo", cb=message_handler)
-        await c.nc.publish('test.serverish.foo', b'Hello OCA!')
+        await c.nc.subscribe("test.js.test_nats_publish", cb=message_handler)
+        await c.nc.publish('test.js.test_nats_publish', b'Hello OCA!')
         try:
             await asyncio.wait_for(message_received.wait(), timeout=1)
         except asyncio.TimeoutError:
@@ -94,8 +94,8 @@ async def test_js_publish_subscribe():
 
     c = ConnectionJetStream(host='localhost', port=4222)
     async with c:
-        await c.js.publish('test.js.foo1', b'Hello OCA!')
-        await c.js.subscribe("test.js.foo1", cb=message_handler, deliver_policy='last')
+        await c.js.publish('test.js.test_js_publish_subscribe', b'Hello OCA!')
+        await c.js.subscribe("test.js.test_js_publish_subscribe", cb=message_handler, deliver_policy='last')
         try:
             await asyncio.wait_for(message_received.wait(), timeout=1)
         except asyncio.TimeoutError:

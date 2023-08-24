@@ -209,13 +209,17 @@ class Messenger(Singleton):
         return MsgPublisher(subject=subject, parent=Messenger())
 
     @staticmethod
-    def get_reader(subject: str, queue: str | None = None, durable_name: str | None = None, **kwargs) -> 'MsgReader':
+    def get_reader(subject: str,
+                   deliver_policy='all',
+                   opt_start_time=None,
+                   **kwargs) -> 'MsgReader':
         """Returns a reader for a given subject
 
         Args:
             subject (str): subject to subscribe to
-            queue (str): queue name, if None, subject is used
-            durable_name (str): durable name, if None, queue is used
+            deliver_policy (str): deliver policy, one of 'all', 'last', 'new', 'by_start_time', will be passed to consumer config
+            opt_start_time (datetime): start time for 'by_start_time' deliver policy, will be passed to consumer config
+            kwargs: additional arguments to pass to the reader and underlying NATS consumer config
 
         Returns:
             MsgReader: message subscriber
@@ -226,7 +230,16 @@ class Messenger(Singleton):
                 print(msg)
         """
         from serverish.messenger.msg_reader import MsgReader
-        return MsgReader(subject=subject, queue=queue, durable_name=durable_name, parent=Messenger(), **kwargs)
+        return MsgReader(subject=subject,
+                         parent=Messenger(),
+                         deliver_policy=deliver_policy,
+                         opt_start_time=opt_start_time,
+                         consumer_cfg=kwargs)
+
+    async def purge(self, subject: str) -> None:
+        js = self.connection.js
+        stream = await js.find_stream_name_by_subject(subject)
+        await js.purge_stream(stream, subject=subject)
 
 
 class MsgDriver(Manageable):

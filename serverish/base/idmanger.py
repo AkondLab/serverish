@@ -16,8 +16,7 @@ def gen_uid(name: str, length: int = 10):
 
     Uses uuid4 and URL safe base64 encoding to generate unique ID
     """
-    ids = IdManager()
-    return ids.get_uid(name, length)
+    return IdManager.get_uid(name, length)
 
 
 class IdManager(Singleton):
