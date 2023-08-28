@@ -1,0 +1,3 @@
+
+class MessengerReaderStopped(Exception):
+    pass

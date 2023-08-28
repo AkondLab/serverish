@@ -195,6 +195,12 @@ class Messenger(Singleton):
     def decode(self, bdata: bytes) -> dict:
         return json.loads(bdata.decode('utf-8'))
 
+    async def purge(self, subject: str) -> None:
+        js = self.connection.js
+        stream = await js.find_stream_name_by_subject(subject)
+        await js.purge_stream(stream, subject=subject)
+
+
     @staticmethod
     def get_publisher(subject: str) -> "MsgPublisher":
         """Returns a publisher for a given subject
@@ -236,10 +242,29 @@ class Messenger(Singleton):
                          opt_start_time=opt_start_time,
                          consumer_cfg=kwargs)
 
-    async def purge(self, subject: str) -> None:
-        js = self.connection.js
-        stream = await js.find_stream_name_by_subject(subject)
-        await js.purge_stream(stream, subject=subject)
+    @staticmethod
+    def get_singlepublisher(subject):
+        """Returns a signle-publisher for a given subject
+
+        Args:
+            subject (str): subject to publish to
+
+        Returns:
+            MsgSinglePublisher: a publisher for the given subject
+
+        """
+        from serverish.messenger.msg_single_pub import MsgSinglePublisher
+        return MsgSinglePublisher(subject=subject, parent=Messenger())
+
+    @staticmethod
+    def get_singlereader(subject,
+                         deliver_policy='last',
+                         **kwargs):
+        from serverish.messenger.msg_single_read import MsgSingleReader
+        return MsgSingleReader(subject=subject,
+                               parent=Messenger(),
+                               deliver_policy=deliver_policy,
+                               **kwargs)
 
 
 class MsgDriver(Manageable):

@@ -45,7 +45,7 @@ class ConnectionNATS(Connection):
     async def nats_disconnected_cb(self):
         """Disconnected callback for NATS connection"""
         await self.update_statuses()
-        _logger.error(f'NATS disconnected: Status: {self.format_status()}')
+        _logger.info(f'NATS disconnected: Status: {self.format_status()}')
 
     async def nats_reconnected_cb(self):
         """Reconnected callback for NATS connection"""
@@ -55,7 +55,7 @@ class ConnectionNATS(Connection):
     async def nats_closed_cb(self):
         """Closed callback for NATS connection"""
         await self.update_statuses()
-        _logger.warning(f'NATS closed: Status: {self.format_status()}')
+        _logger.info(f'NATS closed: Status: {self.format_status()}')
 
     async def connect(self, **kwargs):
         """Connects to NATS server

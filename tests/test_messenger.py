@@ -104,9 +104,6 @@ async def test_messenger_pub_then_sub():
 async def test_messenger_pub_sub_pub():
 
     now = datetime.datetime.now()
-    pub = await get_publisher('test.messenger.test_messenger_pub_sub_pub')
-    # sub = await get_subscription('test.messenger', deliver_policy='by_start_time', opt_start_time=now)
-    sub = await get_reader('test.messenger.test_messenger_pub_sub_pub', deliver_policy='all')
     collected = []
     async def subsciber_task(sub):
         async for msg, meta in sub:
@@ -124,7 +121,11 @@ async def test_messenger_pub_sub_pub():
         if finalize:
             await pub.publish(data={'n': 10, 'final': True}, meta=meta)
 
-    async with Messenger().context(host='localhost', port=4222):
+    async with Messenger().context(host='localhost', port=4222) as mess:
+        mess.purge('test.messenger.test_messenger_pub_sub_pub')
+        pub = await get_publisher('test.messenger.test_messenger_pub_sub_pub')
+        sub = await get_reader('test.messenger.test_messenger_pub_sub_pub', deliver_policy='all')
+
         await publisher_task(pub, finalize=False) # pre-publish 10
         await asyncio.sleep(0.1)
         # subscribe and publish 11 more

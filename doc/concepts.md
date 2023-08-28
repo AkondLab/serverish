@@ -41,3 +41,17 @@ The name corresponds to the `message_type` field of the message metadata.
 
 Metadata schema is hardcoded in the `MetaValidator` class.
 
+### Specialized publishers and readers
+
+Usually, one have to ensure opening and closing messenger properly. 
+Then all communication is done via specialized classes maintaining connection on single subject.
+
+All those classes derive from `MsgDriver` class. 
+There are convenient methods and functions for obtaining those classes instances in the `Messenger` class.
+
+Lookup the table below to choose the right class for your needs.
+
+| Publish class         | Read class         | Functions                                                                | Description and use-cases                                                                                                                                                                                                                                       |
+|-----------------------|--------------------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `MsgPublisher`        | `MsgReader`        | `get_publisher` `get_reader`                                             | The most general classes. Sutiable for publishing / reading multiple messages. For reader it can be used for existing and future messages. It creates pull-consumer for existing messages and automatically switches to push consumer waiting for new messages. |
+| `MsgSinglePublisher`  | `MsgSingleReader`  | `get_singlepublisher` `get_singlereader` `single_publish` `single_read`  | The classes and methods to publish and read single value. The usecase is e.g. distribution of the config settings dictionary.                                                                                                                                   |

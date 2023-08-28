@@ -6,10 +6,10 @@ from asyncio import Event
 
 import nats.errors
 import param
-from nats.aio.subscription import Subscription
 from nats.js import JetStreamContext
 from nats.js.api import DeliverPolicy, ConsumerConfig
 
+from serverish.base.exceptions import MessengerReaderStopped
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
 
@@ -17,6 +17,12 @@ log = logging.getLogger(__name__.rsplit('.')[-1])
 
 
 class MsgReader(MsgDriver):
+    """A class for reading data from a Messenger subject
+
+    Use this class if you want to read data from a messenger subject.
+    Check for specialist readers for common use cases.
+    """
+
     deliver_policy: str = param.ObjectSelector(default='all',
                                                objects=['all', 'last', 'new',
                                                         'by_start_sequence',
@@ -53,6 +59,14 @@ class MsgReader(MsgDriver):
         return self
 
     async def __anext__(self):
+        try:
+            data, meta = await self.read_next()
+            return data, meta
+        except MessengerReaderStopped:
+            raise StopAsyncIteration
+
+
+    async def read_next(self) -> tuple[dict, dict]:
         if not self.is_open:
             await self.open()
 
@@ -75,7 +89,7 @@ class MsgReader(MsgDriver):
             while True:
                 if self._stop.is_set():
                     await self.close()
-                    raise StopAsyncIteration
+                    raise MessengerReaderStopped
                 try:
                     bmsg = await self.push_subscription.next_msg()
                     break
@@ -89,7 +103,7 @@ class MsgReader(MsgDriver):
         if bmsg is None:
             log.debug(f"No message to return, closing {self}")
             await self.close()
-            raise StopAsyncIteration
+            raise MessengerReaderStopped
         msg = self.messenger.decode(bmsg.data)
         self.messenger.log_msg_trace(msg, f"SUB iteration from {self.subject}")
         data, meta = self.messenger.split_msg(msg)
@@ -98,7 +112,7 @@ class MsgReader(MsgDriver):
 
     async def open(self) -> None:
         if self.pull_subscription is not None:
-            raise RuntimeError("Subscription already open, do not reuse MsgSubscription instances")
+            raise RuntimeError("Reader already open, do not reuse MsgReader instances")
 
         log.debug(f"Opening {self}")
         js = self.connection.js
