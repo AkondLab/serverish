@@ -18,9 +18,11 @@ class Manageable(param.Parameterized):
 
     def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
         self.parent: Collector = parent
+        from serverish.base.idmanger import gen_uid, gen_id
         if name is None:
-            from serverish.base.idmanger import gen_uid
             name = gen_uid('manageable')
+        else:
+            name = gen_id(name)
         super().__init__(name=name, **kwargs)
         if parent is not None:
             self.parent.ensure_parenting(self)

@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import asyncio
 from asyncio import Event
+from datetime import datetime
 
 import nats.errors
 import param
 from nats.js import JetStreamContext
 from nats.js.api import DeliverPolicy, ConsumerConfig
 
+from serverish.base import wait_for_psce
 from serverish.base.exceptions import MessengerReaderStopped
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
@@ -49,6 +51,7 @@ class MsgReader(MsgDriver):
         self.is_open: bool = False
         self._stop: Event = Event()
         self._push: Event = Event()
+        self._msg_processed: Event = Event()
         super().__init__(subject=subject, parent=parent,
                          deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg,
                          **kwargs)
@@ -108,6 +111,7 @@ class MsgReader(MsgDriver):
         self.messenger.log_msg_trace(msg, f"SUB iteration from {self.subject}")
         data, meta = self.messenger.split_msg(msg)
         log.debug(f"Returning message {self}")
+        self._msg_processed.set()
         return data, meta
 
     async def open(self) -> None:
@@ -188,8 +192,41 @@ class MsgReader(MsgDriver):
             await self.push_subscription.unsubscribe()
             self.push_subscription = None
 
+    async def wait_for_empty(self, timeout: float | None = None) -> None:
+        """Waits for the subscription to be empty, returns when no more messages are currently available
+
+        Should not be called from within an iteration
+
+        Args:
+            timeout (float): timeout in seconds
+
+        """
+        now = datetime.now()
+        if not self.is_open:
+            raise RuntimeError("Subscription not open")
+
+        # wait for pull subscription to finish ot stop
+        tw = asyncio.create_task(self._push.wait())
+        ts = asyncio.create_task(self._stop.wait())
+        await asyncio.wait([tw, ts],
+                           timeout=timeout,
+                           return_when=asyncio.FIRST_COMPLETED
+                           )
+        tw.cancel()
+        ts.cancel()
+        if self._stop.is_set():
+            return
+        elif self._push.is_set():
+            self._msg_processed.clear()
+            while self.push_subscription.pending_msgs > 0:
+                to = timeout - (datetime.now() - now).total_seconds() if timeout is not None else None
+                await wait_for_psce(self._msg_processed.wait(), timeout=to)
+                self._msg_processed.clear()
+
+
+
     async def drain(self, timeout: float | None = None) -> None:
-        """Drains the subscription, returns when no more messages are available
+        """Drains then CLOSES the subscription, returns when no more messages are available
 
         Should not be called from within an iteration (use stop instead)
 
@@ -200,15 +237,15 @@ class MsgReader(MsgDriver):
         if not self.is_open:
             raise RuntimeError("Subscription not open")
 
-        if timeout is not None:
-            # Calculate the remaining timeout after waiting for events
-            start_time = asyncio.get_event_loop().time()
-
         # wait for pull subscription to finish ot stop
-        await asyncio.wait([self._push.wait(), self._stop.wait()],
+        tw = asyncio.create_task(self._push.wait())
+        ts = asyncio.create_task(self._stop.wait())
+        await asyncio.wait([tw, ts],
                            timeout=timeout,
                            return_when=asyncio.FIRST_COMPLETED
                            )
+        tw.cancel()
+        ts.cancel()
         if self._stop.is_set():
             return
         elif self._push.is_set():

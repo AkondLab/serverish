@@ -266,6 +266,17 @@ class Messenger(Singleton):
                                deliver_policy=deliver_policy,
                                **kwargs)
 
+    @staticmethod
+    def get_callbacksubscriber(subject,
+                               deliver_policy='last',
+                               **kwargs):
+        from serverish.messenger.msg_callback_sub import MsgCallbackSubscriber
+        return MsgCallbackSubscriber(subject=subject,
+                                     parent=Messenger(),
+                                     deliver_policy=deliver_policy,
+                                     **kwargs)
+
+
 
 class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")

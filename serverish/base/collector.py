@@ -1,16 +1,26 @@
 import logging
 
+import param
+
 from serverish.base.manageable import Manageable
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 class Collector(Manageable):
     """Has manageable children"""
-    children: list[Manageable] = None
+    # children: list[Manageable] = None
+    children_by_name: dict[str, Manageable] = param.Dict(default=dict(), allow_None=False, doc='Children by name')
+    children_names: dict[Manageable, str] = param.Dict(default=dict(), allow_None=False, doc='Names by child')
 
     def ensure_parenting(self, child: Manageable):
-        if self.children is None:
-            self.children = []
-        if child not in self.children:
-            self.children.append(child)
+        try:
+            name = self.children_names[child]
+        except KeyError:
+            name = child.name
+        self.children_by_name[name] = child
+        self.children_names[child] = name
         child.parent = self
+
+    @property
+    def children(self):
+        return self.children_by_name.values()

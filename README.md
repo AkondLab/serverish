@@ -10,3 +10,8 @@
 
 See [`doc` directory](doc/) for more documentation.
 
+
+
+## Credits
+This package uses some code and ideas from the [ritch](https://github.com/Textualize/rich) package (Copyright (c) 2020 Will McGugan).
+
