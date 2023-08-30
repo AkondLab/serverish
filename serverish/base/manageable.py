@@ -26,3 +26,15 @@ class Manageable(param.Parameterized):
         super().__init__(name=name, **kwargs)
         if parent is not None:
             self.parent.ensure_parenting(self)
+
+    def remove_parent(self):
+        """Removes parent"""
+        if self.parent is not None:
+            self.parent.remove_child(self)
+            self.parent = None
+
+    def set_parent(self, parent: Collector):
+        """Sets parent"""
+        self.remove_parent()
+        self.parent = parent
+        self.parent.ensure_parenting(self)

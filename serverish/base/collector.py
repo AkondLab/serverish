@@ -21,6 +21,15 @@ class Collector(Manageable):
         self.children_names[child] = name
         child.parent = self
 
+    def remove_child(self, child: Manageable):
+        try:
+            name = self.children_names[child]
+        except KeyError:
+            name = child.name
+        del self.children_by_name[name]
+        del self.children_names[child]
+        child.parent = None
+
     @property
     def children(self):
         return self.children_by_name.values()

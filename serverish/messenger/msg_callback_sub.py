@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 import asyncio
-from asyncio import Event
+from asyncio import Event, CancelledError
 
 import param
 
@@ -28,6 +28,8 @@ class MsgCallbackSubscriber(MsgReader):
 
     async def close(self) -> None:
         await self.stop()
+        if self.task is not None:
+            self.task.cancel()
         return await super().close()
 
     async def stop(self) -> None:
@@ -44,35 +46,34 @@ class MsgCallbackSubscriber(MsgReader):
         """
         self.callback = callback
         if asyncio.iscoroutinefunction(callback):
-            self.task = await create_task(self._task_abody(callback), f'NATSASUB.{self.subject}')
+            self.task = await create_task(self._task_body(acb = callback), f'NATSASUB.{self.subject}')
         else:
-            self.task = await create_task(self._task_body(callback), f'NATSSSUB.{self.subject}')
+            self.task = await create_task(self._task_body(scb= callback), f'NATSSSUB.{self.subject}')
         return self.task
 
+    async def _task_body(self,
+                         scb: Callable[[dict, dict], bool] | None = None,
+                         acb: Callable[[dict, dict], asyncio.Future] | None = None
+                         ) -> None:
 
-    async def _task_body(self, callback: Callable[[dict, dict], bool]) -> None:
+        assert scb is not None or acb is not None
+        assert not (scb is not None and acb is not None)
+        cb = scb or acb
         cont = True
         async for data, meta in self:
             try:
-                cont = callback(data, meta)
+                if scb is not None:
+                    cont = scb(data, meta)
+                else:
+                    cont = await acb(data, meta)
+            except CancelledError:
+                log.debug(f'Cancelled {self}')
+                break
             except Exception as e:
-                log.exception(f'Error in callback {callback} for message {meta}{data:20}: {e}')
+                log.exception(f'Error in callback {cb} for message {meta}{data:20}: {e}')
             if not cont or self._stop_event.is_set() :
                 break
         log.debug(f"Exiting sync interation{self}")
-
-
-
-    async def _task_abody(self, callback: Callable[[dict, dict], asyncio.Future]) -> None:
-        cont = True
-        async for data, meta in self:
-            try:
-                cont = await callback(data, meta)
-            except Exception as e:
-                log.exception(f'Error in async callback {callback} for message {meta}{data:20}: {e}')
-            if not cont or self._stop_event.is_set() :
-                break
-        log.debug(f"Exiting async interation{self}")
 
 
 async def get_callbacksubscriber(subject: str,

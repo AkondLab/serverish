@@ -3,6 +3,7 @@ import logging
 
 import param
 
+from serverish.base import Status
 from serverish.base.asyncio_util_functions import wait_for_psce
 from serverish.base.collector import Collector
 from serverish.base.hasstatuses import HasStatuses
@@ -28,11 +29,26 @@ class Task(HasStatuses):
 
     async def start(self):
         """Runs the task"""
+        def done_cb(task):
+            logger.debug(f'Task {self.name} done')
+            self.set_status('running', Status.new_na(msg='Task finished'))
+            self.remove_parent()
+
         self.task = asyncio.create_task(self.coro, name=self.name)
+        self.task.add_done_callback(done_cb)
+
+    def cancel(self):
+        """Cancels the task"""
+        if self.task is not None:
+            self.task.cancel()
+
+
 
 
 class TaskManager(Singleton):
-    """Manages asyncio tasks"""
+    """Manages running asyncio tasks
+
+    Done tasks removes themselves from manager"""
 
     async def create_task(self, coro, name: str):
         """Creates task, like asyncio.create_task, but tracked"""
@@ -42,13 +58,19 @@ class TaskManager(Singleton):
 
     async def cancel_all(self, timeout: float = 10):
         """Cancels all tasks"""
-        for task in self.children:
-            t: asyncio.Task = task.task
-            t.cancel()
+        n = 0
+        tasks = [t for t in self.children]
+        for task in tasks:
+            n += 1
+            try:
+                t: asyncio.Task = task.task
+                t.cancel()
+            except RuntimeError as e:
+                logger.error(f'Error canceling task {n} {task.name}: {e}')
 
         logger.info('Canceled all tasks. Waiting for them to finish...')
 
-        for task in self.children:
+        for task in tasks:
             try:
                 await wait_for_psce(task.task, timeout)
             except asyncio.TimeoutError:
@@ -62,7 +84,7 @@ class TaskManager(Singleton):
 
         # check (optional)
         nf = []
-        for task in self.children:
+        for task in tasks:
             if not task.task.done():
                 logger.error(f'Task {task.name} still not done (after cancel all).')
                 nf.append(task)
