@@ -95,6 +95,7 @@ class MsgReader(MsgDriver):
                     raise MessengerReaderStopped
                 try:
                     bmsg = await self.push_subscription.next_msg()
+                    await bmsg.ack()
                     break
                 except nats.errors.TimeoutError:
                     pass  # keep iterating
