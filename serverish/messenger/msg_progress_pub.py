@@ -236,6 +236,7 @@ class MsgProgressPublisher(MsgPublisher):
         """Send the progress information to the server."""
 
 
+
     async def add_task(
         self,
         description: str,

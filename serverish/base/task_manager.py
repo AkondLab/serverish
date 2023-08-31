@@ -13,10 +13,6 @@ from serverish.base.singleton import Singleton
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 
-def create_task(coro, name: str):
-    """Creates task, like asyncio.create_task, but tracked"""
-    tm = TaskManager()
-    return tm.create_task(coro, name=name)
 
 
 class Task(HasStatuses):
@@ -43,6 +39,10 @@ class Task(HasStatuses):
             self.task.cancel()
 
 
+async def create_task(coro, name: str, class_=Task) -> Task:
+    """Creates task, like asyncio.create_task, but tracked"""
+    tm = TaskManager()
+    return await tm.create_task(coro, name=name, class_=class_)
 
 
 class TaskManager(Singleton):
@@ -50,9 +50,9 @@ class TaskManager(Singleton):
 
     Done tasks removes themselves from manager"""
 
-    async def create_task(self, coro, name: str):
+    async def create_task(self, coro, name: str, class_=Task) -> Task:
         """Creates task, like asyncio.create_task, but tracked"""
-        task = Task(coro=coro, name=name, parent=self)
+        task = class_(coro=coro, name=name, parent=self)
         await task.start()
         return task
 

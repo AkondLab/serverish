@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "serverish"
-version = "0.5.4"
+version = "0.5.5"
 description = "helpers for server alike projects"
 authors = ["Mikołaj Kałuszyński"]
 readme = "README.md"
