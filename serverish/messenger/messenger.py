@@ -276,6 +276,45 @@ class Messenger(Singleton):
                                      deliver_policy=deliver_policy,
                                      **kwargs)
 
+    @staticmethod
+    def get_rpcrequester(subject) -> 'MsgRpcRequester':
+        """Returns a RPC requester for a given subject
+
+        Args:
+            subject (str): subject to publish to
+
+        Returns:
+            MsgRpcRequester: a publisher for the given subject
+
+        """
+
+        from serverish.messenger.msg_rpc_req import MsgRpcRequester
+        return MsgRpcRequester(subject=subject,
+                               parent=Messenger())
+
+
+    @staticmethod
+    def get_rpcresponder(subject) -> 'MsgRpcResponder':
+        """Returns a callback-based subscriber RPC responder
+
+        Args:
+            subject (str): subject to read from
+
+        Returns:
+            MsgRpcResponder: a single-value reader for the given subject
+
+
+        Usage:
+            r = async get_rpcresponder("subject"):
+            r.open()
+            r register_function(callback)
+            #...
+            r.close()
+        """
+
+        from serverish.messenger.msg_rpc_resp import MsgRpcResponder
+        return MsgRpcResponder(subject=subject,
+                               parent=Messenger())
 
 
 class MsgDriver(Manageable):
@@ -307,8 +346,9 @@ class MsgDriver(Manageable):
     async def close(self) -> None:
         pass
 
-    async def __aenter__(self) -> None:
+    async def __aenter__(self):
         await self.open()
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.close()

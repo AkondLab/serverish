@@ -54,6 +54,9 @@ class MsgRpcRequester(MsgDriver):
             raise MessengerRequestNoResponders(e)
         except TimeoutError as e:
             raise MessengerRequestTimeout(e)
+        rmsg = self.messenger.decode(resp.data)
+        rdata, rmeta = self.messenger.split_msg(rmsg)
+        return rdata, rmeta
 
 
 
@@ -120,8 +123,8 @@ class MsgRpcRequester(MsgDriver):
         #     pass
 
 
-async def get_rpcrequester(subject) -> MsgRpcRequester:
-    """Returns a signle-publisher for a given subject
+def get_rpcrequester(subject) -> MsgRpcRequester:
+    """Returns a RPC requester for a given subject
 
     Args:
         subject (str): subject to publish to
@@ -144,5 +147,5 @@ async def request(subject,
         meta (dict): message metadata
         timeout (float): time to wait for a response, None to wait forever
     """
-    pub = await get_rpcrequester(subject)
+    pub = get_rpcrequester(subject)
     return await pub.request(data, meta=meta, timeout=timeout)

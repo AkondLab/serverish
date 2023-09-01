@@ -27,7 +27,7 @@ class MsgRpcResponder(MsgDriver):
         self.subscription: Subscription | None = None
         super().__init__(**kwargs)
 
-    async def register_fuction(self, callback: Callable[[dict, dict], (dict, dict)] | Callable[[dict, dict], asyncio.Future]) -> Task:
+    async def register_function(self, callback: Callable[[dict, dict], (dict, dict)] | Callable[[dict, dict], asyncio.Future]) -> Task:
         """Sets a callback function for each message
 
         Args:
@@ -73,23 +73,21 @@ class MsgRpcResponder(MsgDriver):
         return await super().close()
 
 
-async def get_rpcresponder(subject: str,
-                           **kwargs) -> 'MsgRpcResponder':
-    """Returns a callback-based subscriber for a given subject
+def get_rpcresponder(subject: str) -> 'MsgRpcResponder':
+    """Returns a callback-based subscriber RPC responder
 
     Args:
         subject (str): subject to read from
-        deliver_policy: deliver policy, in this context 'last' is most useful
-        kwargs: additional arguments to pass to the consumer config
 
     Returns:
-        MsgSingleReader: a single-value reader for the given subject
+        MsgRpcResponder: a single-value reader for the given subject
 
 
     Usage:
-        r = async get_singlereader("subject"):
-            print(r.read())
-
+        r = async get_rpcresponder("subject"):
+        r.open()
+        r register_function(callback)
+        #...
+        r.close()
     """
-    return Messenger.get_rpcresponder(subject=subject,
-                                            **kwargs)
+    return Messenger.get_rpcresponder(subject=subject)
