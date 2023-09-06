@@ -6,7 +6,7 @@ from asyncio import CancelledError
 from nats.errors import NoRespondersError, TimeoutError
 
 from serverish.base import MessengerRequestNoResponders, MessengerRequestCanceled, MessengerRequestNoResultYet, \
-    MessengerRequestTimeout
+    MessengerRequestTimeout, MessengerRequestJetStreamSubject
 from serverish.base import Task, create_task
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
@@ -56,6 +56,8 @@ class MsgRpcRequester(MsgDriver):
             raise MessengerRequestTimeout(e)
         rmsg = self.messenger.decode(resp.data)
         rdata, rmeta = self.messenger.split_msg(rmsg)
+        if rmeta is None:
+            raise MessengerRequestJetStreamSubject(self.subject)
         return rdata, rmeta
 
 

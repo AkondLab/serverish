@@ -136,7 +136,7 @@ class Messenger(Singleton):
         return msg
 
     @staticmethod
-    def split_msg(msg: dict) -> tuple[dict, dict]:
+    def split_msg(msg: dict) -> tuple[dict, dict | None]:
         """Splits message into data and meta
 
         Args:
@@ -146,7 +146,7 @@ class Messenger(Singleton):
             tuple[dict, dict]: data, meta
         """
         data = msg.get('data', {})
-        meta = msg.get('meta', {})
+        meta = msg.get('meta', None)
         return data, meta
 
     @classmethod
@@ -305,11 +305,17 @@ class Messenger(Singleton):
 
 
         Usage:
-            r = async get_rpcresponder("subject"):
-            r.open()
-            r register_function(callback)
-            #...
-            r.close()
+            def callback(rpc: Rpc):
+                c = rpc.data['a'] + rpc.data['b']
+                rpc.set_response(data={'c': c})
+
+            responder = MsgRpcResponder(subject='subject')
+            responder.open()
+            try:
+                await responder.register_function(callback)
+                # ... wait for incoming messages
+            finally:
+                await responder.close()
         """
 
         from serverish.messenger.msg_rpc_resp import MsgRpcResponder
