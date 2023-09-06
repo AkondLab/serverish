@@ -20,8 +20,8 @@ class MsgSinglePublisher(MsgPublisher):
             await self.close()
 
 
-async def get_singlepublisher(subject) -> MsgSinglePublisher:
-    """Returns a signle-publisher for a given subject
+def get_singlepublisher(subject) -> MsgSinglePublisher:
+    """Returns a single-publisher for a given subject
 
     Args:
         subject (str): subject to publish to
@@ -43,5 +43,5 @@ async def single_publish(subject, data: dict | None = None, meta: dict | None = 
         kwargs: additional arguments to pass to the connection
 
     """
-    pub = await get_singlepublisher(subject)
+    pub = get_singlepublisher(subject)
     return await pub.publish(data, meta=meta, **kwargs)

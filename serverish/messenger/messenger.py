@@ -316,6 +316,23 @@ class Messenger(Singleton):
         return MsgRpcResponder(subject=subject,
                                parent=Messenger())
 
+    @staticmethod
+    def get_progresspublisher(subject) -> 'MsgProgressPublisher':
+        """Returns a progress tracking publisher for a given subject
+
+        Args:
+            subject (str): subject to report progress to
+
+        Returns:
+            MsgProgressPublisher: a publisher for the given subject
+
+        """
+
+        from serverish.messenger.msg_progress_pub import MsgProgressPublisher
+        return MsgProgressPublisher(subject=subject,
+                                    parent=Messenger())
+
+
 
 class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")

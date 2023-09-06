@@ -263,7 +263,7 @@ class MsgReader(MsgDriver):
         self._stop.set()
 
 
-async def get_reader(subject: str,
+def get_reader(subject: str,
                    deliver_policy='all',
                    opt_start_time=None,
                    **kwargs) -> 'MsgReader':

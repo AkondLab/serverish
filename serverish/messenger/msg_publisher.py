@@ -42,7 +42,7 @@ class MsgPublisher(MsgDriver):
         return msg
 
 
-async def get_publisher(subject) -> MsgPublisher:
+def get_publisher(subject) -> MsgPublisher:
     """Returns a publisher for a given subject
 
     Args:

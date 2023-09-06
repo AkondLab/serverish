@@ -1,4 +1,3 @@
-import logging
 import asyncio
 import datetime
 import logging
@@ -7,7 +6,7 @@ import pytest
 
 from serverish.messenger import Messenger, get_publisher, get_reader
 from tests.test_connection import ci
-from tests.test_nats import is_nats_running, ensure_stram_for_tests
+from tests.test_nats import is_nats_running
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async
@@ -17,7 +16,7 @@ async def test_messenger_pub_simple():
     # await ensure_stram_for_tests("srvh-test", "test.messenger.test_messenger_pub_simple")
 
     await Messenger().open(host='localhost', port=4222)
-    pub = await get_publisher('test.messenger.test_messenger_pub_simple')
+    pub = get_publisher('test.messenger.test_messenger_pub_simple')
     await pub.publish(data={'msg': 'test_messenger_pub'},
                       meta={
                           'sender': 'test_messenger_pub',
@@ -35,16 +34,14 @@ async def test_messenger_pub_simple_cm():
     assert not Messenger().is_open
 
 
-
-
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_sub():
 
     now = datetime.datetime.now()
-    pub = await get_publisher('test.messenger.test_messenger_pub_sub')
-    sub = await get_reader('test.messenger.test_messenger_pub_sub', deliver_policy='by_start_time', opt_start_time=now)
+    pub = get_publisher('test.messenger.test_messenger_pub_sub')
+    sub = get_reader('test.messenger.test_messenger_pub_sub', deliver_policy='by_start_time', opt_start_time=now)
 
     async def subsciber_task(sub):
         async for data, meta in sub:
@@ -69,8 +66,8 @@ async def test_messenger_pub_sub():
 async def test_messenger_pub_then_sub():
 
     now = datetime.datetime.now()
-    pub = await get_publisher('test.messenger.test_messenger_pub_then_sub')
-    sub = await get_reader('test.messenger.test_messenger_pub_then_sub',
+    pub = get_publisher('test.messenger.test_messenger_pub_then_sub')
+    sub = get_reader('test.messenger.test_messenger_pub_then_sub',
                            deliver_policy='all',
                            # deliver_policy='by_start_time',
                            # opt_start_time=now,
@@ -123,8 +120,8 @@ async def test_messenger_pub_sub_pub():
 
     async with Messenger().context(host='localhost', port=4222) as mess:
         mess.purge('test.messenger.test_messenger_pub_sub_pub')
-        pub = await get_publisher('test.messenger.test_messenger_pub_sub_pub')
-        sub = await get_reader('test.messenger.test_messenger_pub_sub_pub', deliver_policy='all')
+        pub = get_publisher('test.messenger.test_messenger_pub_sub_pub')
+        sub = get_reader('test.messenger.test_messenger_pub_sub_pub', deliver_policy='all')
 
         await publisher_task(pub, finalize=False) # pre-publish 10
         await asyncio.sleep(0.1)
@@ -137,7 +134,7 @@ async def test_messenger_pub_sub_pub():
 
 async def test_messenger_pub_time_pub_sub():
 
-    pub = await get_publisher('test.messenger.test_messenger_pub_time_pub_sub')
+    pub = get_publisher('test.messenger.test_messenger_pub_time_pub_sub')
     collected = []
     async def subsciber_task(sub):
         async for msg, meta in sub:
@@ -159,7 +156,7 @@ async def test_messenger_pub_time_pub_sub():
         await asyncio.sleep(0.1)
         now = datetime.datetime.now()
         await publisher_task(pub, finalize=False) # publish 11 more
-        sub = await get_reader('test.messenger.test_messenger_pub_time_pub_sub', deliver_policy='by_start_time', opt_start_time=now)
+        sub = get_reader('test.messenger.test_messenger_pub_time_pub_sub', deliver_policy='by_start_time', opt_start_time=now)
         await subsciber_task(sub)
         await pub.close()
         await sub.close()

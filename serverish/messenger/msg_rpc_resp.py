@@ -1,19 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Callable
-import asyncio
-from asyncio import Event, CancelledError
 
-import param
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
 
-from serverish.base import Task, create_task
+from serverish.base import Task
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
-from serverish.messenger.msg_callback_sub import MsgCallbackSubscriber
-from serverish.messenger.msg_reader import MsgReader
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
 

@@ -45,7 +45,7 @@ class MsgSingleReader(MsgReader):
         return data, meta
 
 
-async def get_singlereader(subject: str,
+def get_singlereader(subject: str,
                            deliver_policy='last',
                            **kwargs) -> 'MsgSingleReader':
     """Returns a single value reader for a given subject
@@ -87,10 +87,10 @@ async def single_read(subject: str,
 
     Usage:
         try:
-            print(single_read("subject"))
+            print(await single_read("subject"))
         except MessengerReaderStopped:
             print("No data published yet")
 
     """
-    reader = await get_singlereader(subject, deliver_policy, **kwargs)
+    reader = get_singlereader(subject, deliver_policy, **kwargs)
     return await reader.read(wait=wait)

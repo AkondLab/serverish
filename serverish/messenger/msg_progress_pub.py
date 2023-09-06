@@ -289,11 +289,11 @@ class MsgProgressPublisher(MsgPublisher):
         return all(task.finished for task in self.tasks.values())
 
 
-async def get_progresspublisher(subject) -> MsgProgressPublisher:
-    """Returns a single-publisher for a given subject
+def get_progresspublisher(subject) -> MsgProgressPublisher:
+    """Returns a progress tracking publisher for a given subject
 
     Args:
-        subject (str): subject to publish to
+        subject (str): subject to report progress to
 
     Returns:
         MsgProgressPublisher: a publisher for the given subject

@@ -76,7 +76,7 @@ class MsgCallbackSubscriber(MsgReader):
         log.debug(f"Exiting sync interation{self}")
 
 
-async def get_callbacksubscriber(subject: str,
+def get_callbacksubscriber(subject: str,
                                  deliver_policy='last',
                                  **kwargs) -> 'MsgCallbackSubscriber':
     """Returns a callback-based subscriber for a given subject
@@ -87,12 +87,7 @@ async def get_callbacksubscriber(subject: str,
         kwargs: additional arguments to pass to the consumer config
 
     Returns:
-        MsgSingleReader: a single-value reader for the given subject
-
-
-    Usage:
-        r = async get_singlereader("subject"):
-            print(r.read())
+        MsgCallbackSubscriber: a single-value reader for the given subject
 
     """
     return Messenger.get_callbacksubscriber(subject=subject,
