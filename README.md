@@ -18,6 +18,12 @@ serverish = {git="https://github.com/AkondLab/serverish.git", extras=["messenger
 or specify dpendency with extras in the `pip` convention: `serverish[messenger]`.
 this will install `nats-py` package.
 
+## Changes
+* 0.6 introduces breaking changes in the Messenger API:
+  * Convenience functions `get_xxxxx()` returning publishers/readers are synchronous now. Remove `await`-ing for their results.
+  * Change of signature of the callback for `MsgRpcResponder.register_function` for `Rpc->None`.  
+
+
 ## Credits
 This package uses some code and ideas from the [rich](https://github.com/Textualize/rich) package (Copyright (c) 2020 Will McGugan).
 
