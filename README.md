@@ -15,8 +15,9 @@ In order to use Messenger, you have to add extra 'messenger' to your `project.to
 ```toml
 serverish = {git="https://github.com/AkondLab/serverish.git", extras=["messenger"], branch="master"}
 ```
-this will include `nats-py` package.
+or specify dpendency with extras in the `pip` convention: `serverish[messenger]`.
+this will install `nats-py` package.
 
 ## Credits
-This package uses some code and ideas from the [ritch](https://github.com/Textualize/rich) package (Copyright (c) 2020 Will McGugan).
+This package uses some code and ideas from the [rich](https://github.com/Textualize/rich) package (Copyright (c) 2020 Will McGugan).
 
