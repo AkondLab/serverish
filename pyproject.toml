@@ -23,6 +23,7 @@ pytest = "^7.4.0"
 pytest-asyncio = "^0.21.0"
 nats-py = "^2.3.1"
 jupyter = "*"
+rich = "^13.5.2"
 
 
 [build-system]
