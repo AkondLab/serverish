@@ -1,17 +1,17 @@
 """Simple example of telemetry data publishing using serverish.Messenger"""
 
 import asyncio
-import time
 
+from serverish.base import dt_utcnow_array
 from serverish.messenger import Messenger, get_publisher
 
 
 async def do():
     t = 22.5
 
-    pub = await get_publisher('test.telemetrypubexmaple')
+    pub = get_publisher('test.telemetrypubexmaple')
     await pub.publish(data={
-        'ts': list(time.gmtime()),
+        'ts': dt_utcnow_array(),
         'measurements': {
             'temp': t  # Example temperature measurement
         }

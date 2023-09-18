@@ -1,35 +1,99 @@
 import asyncio
+import logging
+
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+from rich.logging import RichHandler
 from rich.console import Console
 
-console = Console()
+from serverish.messenger.msg_progress_pub import get_progresspublisher, MsgProgressPublisher
 
-async def symuluj_task(progress, task_id: int, sekundy: int) -> None:
-    for i in range(1, sekundy + 1):
-        await asyncio.sleep(1)
-        progress.update(task_id, advance=1)
-    console.log(f"Task {task_id} zakończony!")
+logging.basicConfig(level=logging.INFO,  handlers=[RichHandler()])
 
-async def main() -> None:
-    total_seconds = 5
+
+# console = Console()
+
+async def task_sim_rich(progress: Progress, sec: int) -> None:
+    """ Simulates a task that takes `sec` seconds to complete, reports progress to `rich.progress`"""
+
+    task_id = progress.add_task(f"{sec}s task", total=sec)
+    dsec = 10 * sec
+    for i in range(1, dsec + 10):
+        await asyncio.sleep(0.1)
+        progress.update(task_id, advance=0.1)
+    logging.info(f"Task {task_id} finished!")
+
+async def task_sim_messenger(progress: MsgProgressPublisher, sec: int) -> None:
+    """ Simulates a task that takes `sec` seconds to complete, reports progress to `MsgProgressPublisher`"""
+
+    task_id = await progress.add_task(f"{sec}s task", total=sec) # ! await
+    dsec = 10 * sec
+    for i in range(1, dsec + 10):
+        await asyncio.sleep(0.1)
+        await progress.update(task_id, advance=0.1)  # ! await
+    logging.info(f"Task {task_id} finished!")
+
+
+async def progress_classic_demo():
+    """Simulates tasks and displays progress using `rich.progress` directly"""
     with Progress(
-        TextColumn("[bold blue]{task.fields[id]}"),
+        TextColumn("[bold blue]{task.description}"),
         BarColumn(bar_width=None),
         "[progress.percentage]{task.percentage:>3.0f}%",
         "•",
         TimeRemainingColumn(),
-        transient=True,
+        # transient=True,
     ) as progress:
-
-        task1 = progress.add_task("[cyan]Task 1", id="T1", total=total_seconds)
-        task2 = progress.add_task("[green]Task 2", id="T2", total=total_seconds)
-        task3 = progress.add_task("[magenta]Task 3", id="T3", total=total_seconds)
-
         await asyncio.gather(
-            symuluj_task(progress, task1, 3),
-            symuluj_task(progress, task2, 4),
-            symuluj_task(progress, task3, 5),
+            task_sim_rich(progress, 3),
+            task_sim_rich(progress, 4),
+            task_sim_rich(progress, 10),
+            task_sim_rich(progress, 5),
         )
+
+
+async def progress_messenger_demo():
+    """Simulates tasks and displays progress using `rich.progress` via `ProgressPublisher`"""
+
+    async def progress_publischer(subject):
+        progress = get_progresspublisher(subject)
+        async with progress:
+            await asyncio.gather(
+                task_sim_messenger(progress, 3),
+                task_sim_messenger(progress, 4),
+                task_sim_messenger(progress, 10),
+                task_sim_messenger(progress, 5),
+            )
+
+    async def progress_subscriber(subject):
+        return
+        sub = get_progresssubscriber(subject)
+
+        with Progress(
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(bar_width=None),
+                "[progress.percentage]{task.percentage:>3.0f}%",
+                "•",
+                TimeRemainingColumn(),
+                # transient=True,
+        ) as progress:
+            tasks = {}
+            async for msg in sub:
+                if msg.task_id not in tasks:
+                    tasks[msg.task_id] = progress.add_task(msg.description, id=msg.task_id, total=msg.total)
+                progress.update(tasks[msg.task_id], advance=msg.advance)
+
+    subject = 'test.example.rich_progress'
+    await asyncio.gather(
+        progress_publischer(subject),
+        progress_subscriber(subject),
+    )
+
+
+async def main():
+    logging.info('Direct progress demo')
+    await progress_classic_demo()
+    logging.info('Messenger progress demo')
+    await progress_messenger_demo()
 
 if __name__ == "__main__":
     asyncio.run(main())

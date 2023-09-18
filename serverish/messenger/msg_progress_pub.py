@@ -1,16 +1,20 @@
+"""
+Based on `rich.progress`, in many cases just plugging this class in place of `rich.progress.Progress` works.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
 from operator import length_hint
-from typing import Iterable, Sequence, TypeVar, Optional, BinaryIO
+from typing import Iterable, Sequence, TypeVar, Optional
 
 import param
 
+from serverish.base import dt_to_array
 from serverish.base.idmanger import IdManager
 from serverish.messenger import Messenger
 from serverish.messenger.msg_publisher import MsgPublisher
-
 
 ProgressType = TypeVar("ProgressType")
 
@@ -65,7 +69,6 @@ class ProgressTask:
         self.finished_time = None
 
 
-
 class MsgProgressPublisher(MsgPublisher):
     """A class for publishing progress messages to a subject
 
@@ -103,10 +106,10 @@ class MsgProgressPublisher(MsgPublisher):
 
         for value in sequence:
             yield value
-            self.advance(task_id, 1)
-            await self.publish_progress()
+            await self.advance(task_id, 1)
 
-    def start_task(self, task_id: str) -> None:
+    #ok
+    async def start_task(self, task_id: str) -> None:
         """Start a task.
 
         Starts a task (used when calculating elapsed time). You may need to call this manually,
@@ -118,8 +121,10 @@ class MsgProgressPublisher(MsgPublisher):
         task = self.tasks[task_id]
         if task.start_time is None:
             task.start_time = datetime.utcnow()
+        await self.publish_progress()
 
-    def stop_task(self, task_id: str) -> None:
+    #ok
+    async def stop_task(self, task_id: str) -> None:
         """Stop a task.
 
         This will freeze the elapsed time on the task.
@@ -132,7 +137,9 @@ class MsgProgressPublisher(MsgPublisher):
         if task.start_time is None:
             task.start_time = current_time
         task.stop_time = current_time
+        await self.publish_progress()
 
+    #ok
     async def update(
         self,
         task_id: str,
@@ -141,7 +148,7 @@ class MsgProgressPublisher(MsgPublisher):
         completed: Optional[float] = None,
         advance: Optional[float] = None,
         description: Optional[str] = None,
-        refresh: bool = False,
+        refresh: bool = True,
     ) -> None:
         """Update information associated with a task.
 
@@ -151,7 +158,7 @@ class MsgProgressPublisher(MsgPublisher):
             completed (float, optional): Updates task.completed if not None.
             advance (float, optional): Add a value to task.completed if not None.
             description (str, optional): Change task description if not None.
-            refresh (bool): Force a refresh of progress information. Default is False.
+            refresh (bool): Publish updated progress. Default is True.
         """
         task: ProgressTask = self.tasks[task_id]
         completed_start = task.completed
@@ -185,6 +192,7 @@ class MsgProgressPublisher(MsgPublisher):
         if refresh:
             await self.publish_progress()
 
+    #ok
     async def reset(
         self,
         task_id: str,
@@ -215,7 +223,8 @@ class MsgProgressPublisher(MsgPublisher):
         task.finished_time = None
         await self.publish_progress()
 
-    def advance(self, task_id: str, advance: float = 1) -> None:
+    #ok
+    async def advance(self, task_id: str, advance: float = 1) -> None:
         """Advance task by a number of steps.
 
         Args:
@@ -231,12 +240,26 @@ class MsgProgressPublisher(MsgPublisher):
             and task.finished_time is None
         ):
             task.finished_time = task.elapsed
+        await self.publish_progress()
 
     async def publish_progress(self) -> None:
         """Send the progress information to the server."""
+        pass
+        data = {}
+        for t in self.tasks:
+            task_data = {
+                'id': t.id,
+                'description': t.description,
+                'total': t.total,
+                'completed': t.completed,
+                'finished_time': dt_to_array(t.finished_time),
+                'start_time': dt_to_array(t.start_time),
+                'stop_time': dt_to_array(t.stop_time),
+            }
 
 
 
+    # ok
     async def add_task(
         self,
         description: str,
@@ -268,10 +291,12 @@ class MsgProgressPublisher(MsgPublisher):
         )
         self.tasks[task_id] = task
         if start:
-            self.start_task(task_id)
-        await self.publish_progress()
+            await self.start_task(task_id)
+        else:
+            await self.publish_progress()
         return task_id
 
+    #ok
     def remove_task(self, task_id: str) -> None:
         """Delete a task if it exists.
 
@@ -281,6 +306,7 @@ class MsgProgressPublisher(MsgPublisher):
         """
         del self.tasks[task_id]
 
+    #ok
     @property
     def finished(self) -> bool:
         """Check if all tasks have been completed."""

@@ -26,6 +26,8 @@ class MsgRpcRequester(MsgDriver):
         else:
             print(response)
     """
+
+    @MsgDriver.ensure_open
     async def request(self,
                       data: dict | None = None, meta: dict | None = None,
                       timeout: float | None = None) -> (dict, dict):
@@ -43,6 +45,7 @@ class MsgRpcRequester(MsgDriver):
             MessengerRequestNoResponders: if no responders were found for the request
             MessengerRequestTimeout: if no response was received in time
         """
+        self.open()
         from nats.aio.client import Client as NATS
 
         nats: NATS = self.connection.nc
@@ -123,6 +126,19 @@ class MsgRpcRequester(MsgDriver):
         #     await t.task
         # except asyncio.CancelledError:
         #     pass
+
+    async def open(self) -> None:
+        """Opens the requester"""
+
+        # check if the subject is a JetStream subject which is not supported by request/response mechanism
+        try:
+            js = self.connection.js
+            stream = js.find_stream_name_by_subject(self.subject)
+        except:
+            pass
+        else:
+            raise MessengerRequestJetStreamSubject(self.subject)  # stream for subject found
+        await super().open()
 
 
 def get_rpcrequester(subject) -> MsgRpcRequester:

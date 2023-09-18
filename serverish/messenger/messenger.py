@@ -13,11 +13,12 @@ from __future__ import annotations
 import contextlib
 import logging
 import json
-import time
+import functools
 from typing import TYPE_CHECKING
 
 import param
 
+from serverish.base import dt_utcnow_array, dt_from_array
 from serverish.base.collector import Collector
 from serverish.connection.connection_jets import ConnectionJetStream
 from serverish.base.idmanger import gen_id
@@ -28,7 +29,6 @@ from serverish.base.singleton import Singleton
 if TYPE_CHECKING:
     from serverish.messenger.msg_publisher import MsgPublisher
     from serverish.messenger.msg_reader import MsgReader
-
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -109,7 +109,7 @@ class Messenger(Singleton):
             'id': gen_id('msg'),
             # "sender": "sender_name",
             # "receiver": "receiver_name",  # only for direct messages
-            'ts': list(time.gmtime()),
+            'ts': dt_utcnow_array(),
             'trace_level': logging.DEBUG,  # Message trace will be logged if loglevel <= trace_level
             "message_type": "",
             'tags': [],
@@ -160,7 +160,7 @@ class Messenger(Singleton):
             str: string representation
         """
         data, meta = cls.split_msg(msg)
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S", tuple(meta.pop('ts')))
+        ts = dt_from_array(meta.pop('ts')).strftime("%Y-%m-%dT%H:%M:%S")
         id_ = meta.pop('id')
         smeta = ' '.join(f"{k}:{v}" for k, v in meta.items())
         sdata = json.dumps(data)
@@ -199,7 +199,6 @@ class Messenger(Singleton):
         js = self.connection.js
         stream = await js.find_stream_name_by_subject(subject)
         await js.purge_stream(stream, subject=subject)
-
 
     @staticmethod
     def get_publisher(subject: str) -> "MsgPublisher":
@@ -292,7 +291,6 @@ class Messenger(Singleton):
         return MsgRpcRequester(subject=subject,
                                parent=Messenger())
 
-
     @staticmethod
     def get_rpcresponder(subject) -> 'MsgRpcResponder':
         """Returns a callback-based subscriber RPC responder
@@ -340,8 +338,11 @@ class Messenger(Singleton):
 
 
 
+
+
 class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
+    is_open: bool = param.Boolean(default=False, doc="Has the driver been opened")
     """Message subject operator
 
     Message publisher/subsriber etc base
@@ -364,10 +365,23 @@ class MsgDriver(Manageable):
         return self.messenger.connection
 
     async def open(self) -> None:
-        pass
+        self.is_open = True
 
     async def close(self) -> None:
-        pass
+        self.is_open = False
+
+    @staticmethod
+    def ensure_open(func):
+        @functools.wraps(func)
+        async def wrapper(driver: MsgDriver, *args, **kwargs):
+            # If not open, use context manager
+            if not driver.is_open:
+                async with driver:
+                    return await func(driver, *args, **kwargs)
+            else:
+                return await func(driver, *args, **kwargs)
+
+        return wrapper
 
     async def __aenter__(self):
         await self.open()

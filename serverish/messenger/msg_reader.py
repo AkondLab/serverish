@@ -48,7 +48,6 @@ class MsgReader(MsgDriver):
             consumer_cfg = {}
         self.pull_subscription: JetStreamContext.PullSubscription | None = None
         self.push_subscription: JetStreamContext.PushSubscription | None = None
-        self.is_open: bool = False
         self._stop: Event = Event()
         self._push: Event = Event()
         self._msg_processed: Event = Event()
@@ -137,7 +136,7 @@ class MsgReader(MsgDriver):
             self.push_subscription = await js.subscribe(self.subject,
                                                         config=consumer_conf)
             self._push.set()
-        self.is_open = True
+        await super().open()
 
 
     async def _transform_pull_to_push(self):
@@ -170,6 +169,7 @@ class MsgReader(MsgDriver):
             if isinstance(self.opt_start_time, str):
                 cfg['opt_start_time'] = self.opt_start_time
             else:
+                # TODO: Check if it is proper format for NATS!
                 cfg['opt_start_time'] = self.opt_start_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
         # Create the pull consumer configuration
@@ -177,7 +177,7 @@ class MsgReader(MsgDriver):
         return consumer_conf
 
     async def close(self) -> None:
-        self.is_open = False
+        await super().close()
         await self._close_pull_subscription()
         await self._close_push_subscription()
 
