@@ -25,7 +25,7 @@ class ProgressTask:
     description: str
     total: Optional[float]
     completed: float
-    finished_time: Optional[datetime] = None
+    finished_time: Optional[float] = None # seconds
     start_time: Optional[datetime] = None
     stop_time: Optional[datetime] = None
 
@@ -244,18 +244,19 @@ class MsgProgressPublisher(MsgPublisher):
 
     async def publish_progress(self) -> None:
         """Send the progress information to the server."""
-        pass
         data = {}
-        for t in self.tasks:
+        for tid, t in self.tasks.items():
             task_data = {
-                'id': t.id,
+                'id': tid,
                 'description': t.description,
                 'total': t.total,
                 'completed': t.completed,
-                'finished_time': dt_to_array(t.finished_time),
+                'finished_time': t.finished_time,  # seconds or None
                 'start_time': dt_to_array(t.start_time),
                 'stop_time': dt_to_array(t.stop_time),
             }
+            data[tid] = task_data
+        await self.publish(data, meta={'type': 'progress'})
 
 
 

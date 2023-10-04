@@ -1,0 +1,40 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "string",
+            "description": "Unique message identifier."
+        },
+        "sender": {
+            "type": "string",
+            "description": "Name of the sender."
+        },
+        "receiver": {
+            "type": "string",
+            "description": "Name of the receiver (for direct messages only)."
+        },
+        "ts": {
+            "$ref": "include/timestamp.schema.json"
+        },
+        "trace_level": {
+            "type": "integer",
+            "description": "Message trace will be logged if log level is less or equal to trace level."
+        },
+        "message_type": {
+            "type": "string",
+            "description": "Type of the message."
+        },
+        "tags": {
+            "type": "array",
+            "description": "Tags associated with the message.",
+            "items": {
+                "type": "string"
+            }
+        }
+    },
+    "required": ["id", "sender", "ts", "trace_level", "message_type", "tags"]
+}
+
+
+

@@ -90,8 +90,8 @@ async def progress_messenger_demo():
 
 
 async def main():
-    logging.info('Direct progress demo')
-    await progress_classic_demo()
+    # logging.info('Direct progress demo')
+    # await progress_classic_demo()
     logging.info('Messenger progress demo')
     await progress_messenger_demo()
 
