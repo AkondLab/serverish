@@ -133,7 +133,7 @@ class MsgRpcRequester(MsgDriver):
         # check if the subject is a JetStream subject which is not supported by request/response mechanism
         try:
             js = self.connection.js
-            stream = js.find_stream_name_by_subject(self.subject)
+            stream = await js.find_stream_name_by_subject(self.subject)
         except:
             pass
         else:
