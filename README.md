@@ -5,7 +5,6 @@
 * Component management
 * Singletons
 * Connections management and diagnostics
-* NATS
 * NATS based Messenger
 
 See [`doc` directory](doc/) for more documentation.
@@ -19,6 +18,7 @@ or specify dpendency with extras in the `pip` convention: `serverish[messenger]`
 this will install `nats-py` package.
 
 ## Changes
+* 0.7 Includes progress tracking messages in the Messenger API.
 * 0.6 introduces breaking changes in the Messenger API:
   * Convenience functions `get_xxxxx()` returning publishers/readers are synchronous now. Remove `await`-ing for their results.
   * Change of signature of the callback for `MsgRpcResponder.register_function` for `Rpc->None`.  
