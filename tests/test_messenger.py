@@ -119,7 +119,7 @@ async def test_messenger_pub_sub_pub():
             await pub.publish(data={'n': 10, 'final': True}, meta=meta)
 
     async with Messenger().context(host='localhost', port=4222) as mess:
-        mess.purge('test.messenger.test_messenger_pub_sub_pub')
+        await mess.purge('test.messenger.test_messenger_pub_sub_pub')
         pub = get_publisher('test.messenger.test_messenger_pub_sub_pub')
         sub = get_reader('test.messenger.test_messenger_pub_sub_pub', deliver_policy='all')
 

@@ -15,7 +15,7 @@ from tests.test_nats import is_nats_running, ensure_stram_for_tests
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_single():
     async with Messenger().context(host='localhost', port=4222) as messenger:
-        messenger.purge('test.messenger.test_messenger_pub_single')
+        await messenger.purge('test.messenger.test_messenger_pub_single')
         await single_publish('test.messenger.test_messenger_pub_single', data={'msg': 'test_messenger_pub_single'})
 
 
@@ -24,7 +24,7 @@ async def test_messenger_pub_single():
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_then_read_single():
     async with Messenger().context(host='localhost', port=4222) as messenger:
-        messenger.purge('test.messenger.test_messenger_pub_then_read_single')
+        await messenger.purge('test.messenger.test_messenger_pub_then_read_single')
         data_pub = {'msg': 'test_messenger_pub_single'}
         await single_publish('test.messenger.test_messenger_pub_then_read_single', data=data_pub)
         data_read, meta_read = await single_read('test.messenger.test_messenger_pub_then_read_single')
