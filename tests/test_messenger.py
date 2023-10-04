@@ -99,7 +99,6 @@ async def test_messenger_pub_then_sub():
 @pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_sub_pub():
-    logging.basicConfig(level=logging.DEBUG)
 
     now = datetime.datetime.now()
     collected = []
@@ -121,7 +120,6 @@ async def test_messenger_pub_sub_pub():
 
     async with Messenger().context(host='localhost', port=4222) as mess:
         await mess.purge('test.messenger.test_messenger_pub_sub_pub')
-        await asyncio.sleep(1)
         pub = get_publisher('test.messenger.test_messenger_pub_sub_pub')
         sub = get_reader('test.messenger.test_messenger_pub_sub_pub', deliver_policy='all')
 

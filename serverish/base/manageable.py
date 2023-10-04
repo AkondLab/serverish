@@ -20,7 +20,7 @@ class Manageable(param.Parameterized):
         self.parent: Collector = parent
         from serverish.base.idmanger import gen_uid, gen_id
         if name is None:
-            name = gen_uid('manageable')
+            name = gen_uid(f'{self.__class__.__name__}_')
         else:
             name = gen_id(name)
         super().__init__(name=name, **kwargs)

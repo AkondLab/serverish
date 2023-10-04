@@ -8,7 +8,7 @@ def test_dv_default():
 
 def test_msgv_default():
     msgv = MsgValidator()
-    msg = Messenger.create_msg(data={'a': 1, 'b': 2})
+    msg = Messenger().create_msg(data={'a': 1, 'b': 2})
     msgv.validate(msg)
 
 

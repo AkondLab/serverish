@@ -95,8 +95,7 @@ class Messenger(Singleton):
         finally:
             await self.close()
 
-    @staticmethod
-    def create_meta(meta: dict | None = None) -> dict:
+    def create_meta(self, meta: dict | None = None) -> dict:
         """Creates meta data for a message
 
         Args:
@@ -107,7 +106,7 @@ class Messenger(Singleton):
         """
         ret = {
             'id': gen_id('msg'),
-            # "sender": "sender_name",
+            "sender": self.name,
             # "receiver": "receiver_name",  # only for direct messages
             'ts': dt_utcnow_array(),
             'trace_level': logging.DEBUG,  # Message trace will be logged if loglevel <= trace_level
@@ -118,8 +117,7 @@ class Messenger(Singleton):
             ret.update(meta)
         return ret
 
-    @classmethod
-    def create_msg(cls, data: dict | None = None, meta: dict | None = None) -> dict:
+    def create_msg(self, data: dict | None = None, meta: dict | None = None) -> dict:
         """Creates a message with data and meta
 
         Args:
@@ -132,7 +130,7 @@ class Messenger(Singleton):
         msg = {}
         if data is not None:
             msg['data'] = data
-        msg['meta'] = cls.create_meta(meta)
+        msg['meta'] = self.create_meta(meta)
         return msg
 
     @staticmethod
@@ -160,9 +158,10 @@ class Messenger(Singleton):
             str: string representation
         """
         data, meta = cls.split_msg(msg)
-        ts = dt_from_array(meta.pop('ts')).strftime("%Y-%m-%dT%H:%M:%S")
-        id_ = meta.pop('id')
-        smeta = ' '.join(f"{k}:{v}" for k, v in meta.items())
+        cmeta = meta.copy()
+        ts = dt_from_array(cmeta.pop('ts')).strftime("%Y-%m-%dT%H:%M:%S")
+        id_ = cmeta.pop('id')
+        smeta = ' '.join(f"{k}:{v}" for k, v in cmeta.items())
         sdata = json.dumps(data)
         return f"{ts} {id_} {smeta} data:{sdata[:100]}"
 
@@ -335,8 +334,6 @@ class Messenger(Singleton):
         from serverish.messenger.msg_progress_pub import MsgProgressPublisher
         return MsgProgressPublisher(subject=subject,
                                     parent=Messenger())
-
-
 
 
 

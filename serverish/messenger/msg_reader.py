@@ -12,6 +12,7 @@ from nats.js.api import DeliverPolicy, ConsumerConfig
 
 from serverish.base import wait_for_psce
 from serverish.base.exceptions import MessengerReaderStopped
+from serverish.base.fifoset import FifoSet
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
 
@@ -51,6 +52,7 @@ class MsgReader(MsgDriver):
         self._stop: Event = Event()
         self._push: Event = Event()
         self._msg_processed: Event = Event()
+        self.id_cache = FifoSet(128)
         super().__init__(subject=subject, parent=parent,
                          deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg,
                          **kwargs)
@@ -77,13 +79,24 @@ class MsgReader(MsgDriver):
 
         # First - pull subscription
         if not self._push.is_set():
-            try:
-                log.debug(f"Pulling from {self}")
-                bmsg = (await self.pull_subscription.fetch(batch=1, timeout=0.1))[0]
-                await bmsg.ack()
-                pushed = False
-            except nats.errors.TimeoutError:
-                await self._transform_pull_to_push()
+            while True:
+                try:
+                    log.debug(f"Pulling from {self}")
+                    bmsg = (await self.pull_subscription.fetch(batch=1, timeout=0.1))[0]
+                    await bmsg.ack()
+                    msg = self.messenger.decode(bmsg.data)
+                    self.messenger.log_msg_trace(msg, f"SUB PULL iteration from {self.subject}")
+                    data, meta = self.messenger.split_msg(msg)
+                    pushed = False
+                except nats.errors.TimeoutError:
+                    if self.push_subscription is None:
+                        await self._transform_to_push_sub()
+                        # we are creating push subscription but still pulling messages if possible to do not miss any message
+                        continue
+                    else:
+                        # push is ready and pull timeouts, we can switch to push
+                        self._push.set()
+                break
 
         # Second - push subscription
         if bmsg is None and self._push.is_set():
@@ -95,11 +108,18 @@ class MsgReader(MsgDriver):
                 try:
                     bmsg = await self.push_subscription.next_msg()
                     await bmsg.ack()
+                    msg = self.messenger.decode(bmsg.data)
+                    self.messenger.log_msg_trace(msg, f"SUB PUSH iteration from {self.subject}")
+                    data, meta = self.messenger.split_msg(msg)
+                    if meta['id'] in self.id_cache:
+                        log.debug(f"Skipping duplicated message from {self.subject}")
+                        bmsg = msg = data = meta = None
+                        continue
                     break
                 except nats.errors.TimeoutError:
                     pass  # keep iterating
                 except Exception as e:
-                    log.error(f"During interation on {self}, subscription.next_msg raised {e}")
+                    log.error(f"During interation on {self}, push subscription.next_msg raised {e}")
                     await self.close()
                     raise e
 
@@ -107,9 +127,10 @@ class MsgReader(MsgDriver):
             log.debug(f"No message to return, closing {self}")
             await self.close()
             raise MessengerReaderStopped
-        msg = self.messenger.decode(bmsg.data)
-        self.messenger.log_msg_trace(msg, f"SUB iteration from {self.subject}")
-        data, meta = self.messenger.split_msg(msg)
+        try:
+            self.id_cache.add(meta['id'])
+        except Exception as e:
+            log.error(f"Error adding id of msg: data={data} meta={meta} to id_cache: {e}")
         log.debug(f"Returning message {self}")
         self._msg_processed.set()
         return data, meta
@@ -139,9 +160,9 @@ class MsgReader(MsgDriver):
         await super().open()
 
 
-    async def _transform_pull_to_push(self):
+    async def _transform_to_push_sub(self):
         """After fetching existing messages, switch to push based consumer"""
-        log.debug(f"Attempt to transform {self} from pull to push")
+        log.debug(f"Attempt to transform {self} to push subscription")
         pull = self.pull_subscription
         if pull is None: # no transition needed or not possible
             log.debug(f"No pull - no transform {self}")
@@ -155,9 +176,8 @@ class MsgReader(MsgDriver):
             self.subject, config=consumer_conf
         )
         self.push_subscription = push
-        await self._close_pull_subscription()
-        log.debug(f"Transformed {self} from pull to push")
-        self._push.set()
+        log.debug(f"{self}:  push subscription set up")
+        # self._push.set()
 
     async def _create_consumer_cfg(self):
         cfg = self.consumer_cfg.copy()
