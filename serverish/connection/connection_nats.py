@@ -140,6 +140,7 @@ class ConnectionNATS(Connection):
             try:
                 # loop.sock_connect to do it asynchronously
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.setblocking(False)
                 await loop.sock_connect(s, (host, port))
                 s.close()
                 return f"{host}:{port}", None
