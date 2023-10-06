@@ -146,6 +146,8 @@ class ConnectionNATS(Connection):
                 return f"{host}:{port}", None
             except ConnectionRefusedError:
                 return f"{host}:{port}", f'Connection to {host}:{port} refused'
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 return f"{host}:{port}", f'Error: {e}'
 
