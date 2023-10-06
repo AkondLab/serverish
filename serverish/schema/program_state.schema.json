@@ -1,0 +1,14 @@
+{
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "published": {
+            "type": "array",
+            "items": {"type": "integer"}
+        },
+        "state": {
+            "type": "object"
+        }
+    },
+    "required": ["id", "published", "state"]
+}
