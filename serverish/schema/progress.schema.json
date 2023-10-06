@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for the task."
+    },
+    "description": {
+      "type": "string",
+      "description": "Description of the task."
+    },
+    "total": {
+      "type": [
+        "integer",
+        "number"
+      ],
+      "description": "Total units of work."
+    },
+    "completed": {
+      "type": [
+        "integer",
+        "number"
+      ],
+      "description": "Units of work completed."
+    },
+    "finished_time": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Time taken to complete the task."
+    },
+    "start_time": {
+      "$ref": "#/definitions/timestamp",
+      "description": "Timestamp when the task started."
+    },
+    "stop_time": {
+      "$ref": "#/definitions/timestamp",
+      "description": "Timestamp when the task stopped."
+    }
+  },
+  "required": [
+    "id",
+    "description",
+    "total",
+    "completed",
+    "start_time"
+  ],
+  "definitions": {
+    "timestamp": {
+      "type": ["array", "null"],
+      "description": "Serverish timestamp as an array (tuple): (Year, Month, Day, hour, minute, second, microsecond).",
+      "items": {"type": "integer"},
+      "minItems": 7,
+      "maxItems": 7
+    }
+  }
+}

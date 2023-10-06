@@ -5,7 +5,9 @@ from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from rich.logging import RichHandler
 from rich.console import Console
 
+from serverish.messenger import Messenger
 from serverish.messenger.msg_progress_pub import get_progresspublisher, MsgProgressPublisher
+from serverish.messenger.msg_progress_read import get_progressreader
 
 logging.basicConfig(level=logging.INFO,  handlers=[RichHandler()])
 
@@ -65,8 +67,7 @@ async def progress_messenger_demo():
             )
 
     async def progress_subscriber(subject):
-        return
-        sub = get_progresssubscriber(subject)
+        sub = get_progressreader(subject)
 
         with Progress(
                 TextColumn("[bold blue]{task.description}"),
@@ -77,15 +78,17 @@ async def progress_messenger_demo():
                 # transient=True,
         ) as progress:
             tasks = {}
-            async for msg in sub:
-                if msg.task_id not in tasks:
-                    tasks[msg.task_id] = progress.add_task(msg.description, id=msg.task_id, total=msg.total)
-                progress.update(tasks[msg.task_id], advance=msg.advance)
+            async for msg, meta in sub:
+                if msg.id not in tasks:
+                    tasks[msg.id] = progress.add_task(msg.description, id=msg.id, total=msg.total)
+                progress.update(tasks[msg.id], completed=msg.completed)
 
     subject = 'test.example.rich_progress'
-    await asyncio.gather(
-        progress_publischer(subject),
-        progress_subscriber(subject),
+
+    async with Messenger().context(host='localhost', port=4222):
+        await asyncio.gather(
+            progress_publischer(subject),
+            progress_subscriber(subject),
     )
 
 

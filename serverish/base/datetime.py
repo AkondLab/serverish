@@ -10,22 +10,22 @@ from datetime import datetime
 from typing import Sequence
 
 
-def dt_to_array(dt: datetime | None) -> list:
+def dt_to_array(dt: datetime | None) -> list | None:
     if dt is None:
-        return []
+        return None
     else:
         return [dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, dt.microsecond]
 
 
-def dt_from_array(t: Sequence) -> datetime | None:
+def dt_from_array(t: Sequence | None) -> datetime | None:
     if not t:
         return None
     return datetime(*t)
 
 
-def dt_ensure_array(dt: datetime | Sequence | None) -> list:
+def dt_ensure_array(dt: datetime | Sequence | None) -> list | None:
     if dt is None:
-        return []
+        return None
     elif isinstance(dt, datetime):
         return dt_to_array(dt)
     else:

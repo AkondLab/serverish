@@ -51,7 +51,7 @@ class Messenger(Singleton):
     @property
     def connection(self) -> ConnectionJetStream:
         if self.conn is None:
-            raise ValueError("Messenger Connection opened, use configure(host, port) first")
+            raise ValueError("Messenger connection have not been opened, use configure(host, port) first")
         return self.conn
 
     async def open(self, host: str | None = None, port: int | None = None):
@@ -335,6 +335,28 @@ class Messenger(Singleton):
         return MsgProgressPublisher(subject=subject,
                                     parent=Messenger())
 
+    @staticmethod
+    def get_progressreader(subject,
+                            deliver_policy='last',
+                            stop_when_done: bool = True,
+                            **kwargs) -> 'MsgProgressReader':
+          """Returns a progress reader for a given subject
+
+          Args:
+                subject: subject to read from
+                deliver_policy: deliver policy, in this context 'last' is most useful for progress tracking
+                stop_when_done: whether to stop iteration when all tasks are done
+
+          Returns:
+                MsgProgressReader: a progress reader for the given subject
+          """
+
+          from serverish.messenger.msg_progress_read import MsgProgressReader
+          return MsgProgressReader(subject=subject,
+                                    parent=Messenger(),
+                                    deliver_policy=deliver_policy,
+                                    stop_when_done=stop_when_done,
+                                    **kwargs)
 
 
 class MsgDriver(Manageable):

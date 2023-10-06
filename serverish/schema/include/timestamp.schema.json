@@ -1,6 +1,6 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "type": "array",
+    "type": ["array", "null"],
     "description": "Serverish timestamp as an array (tuple): (Year, Month, Day, hour, minute, second, microsecond).",
     "items": {
         "type": "integer"
