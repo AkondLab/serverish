@@ -13,11 +13,12 @@ from __future__ import annotations
 import contextlib
 import logging
 import json
-import time
+import functools
 from typing import TYPE_CHECKING
 
 import param
 
+from serverish.base import dt_utcnow_array, dt_from_array
 from serverish.base.collector import Collector
 from serverish.connection.connection_jets import ConnectionJetStream
 from serverish.base.idmanger import gen_id
@@ -28,7 +29,6 @@ from serverish.base.singleton import Singleton
 if TYPE_CHECKING:
     from serverish.messenger.msg_publisher import MsgPublisher
     from serverish.messenger.msg_reader import MsgReader
-
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -51,7 +51,7 @@ class Messenger(Singleton):
     @property
     def connection(self) -> ConnectionJetStream:
         if self.conn is None:
-            raise ValueError("Messenger Connection opened, use configure(host, port) first")
+            raise ValueError("Messenger connection have not been opened, use configure(host, port) first")
         return self.conn
 
     async def open(self, host: str | None = None, port: int | None = None):
@@ -108,7 +108,7 @@ class Messenger(Singleton):
             'id': gen_id('msg'),
             "sender": self.name,
             # "receiver": "receiver_name",  # only for direct messages
-            'ts': list(time.gmtime()),
+            'ts': dt_utcnow_array(),
             'trace_level': logging.DEBUG,  # Message trace will be logged if loglevel <= trace_level
             "message_type": "",
             'tags': [],
@@ -159,7 +159,7 @@ class Messenger(Singleton):
         """
         data, meta = cls.split_msg(msg)
         cmeta = meta.copy()
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S", tuple(cmeta.pop('ts')))
+        ts = dt_from_array(cmeta.pop('ts')).strftime("%Y-%m-%dT%H:%M:%S")
         id_ = cmeta.pop('id')
         smeta = ' '.join(f"{k}:{v}" for k, v in cmeta.items())
         sdata = json.dumps(data)
@@ -198,7 +198,6 @@ class Messenger(Singleton):
         js = self.connection.js
         stream = await js.find_stream_name_by_subject(subject)
         await js.purge_stream(stream, subject=subject)
-
 
     @staticmethod
     def get_publisher(subject: str) -> "MsgPublisher":
@@ -291,7 +290,6 @@ class Messenger(Singleton):
         return MsgRpcRequester(subject=subject,
                                parent=Messenger())
 
-
     @staticmethod
     def get_rpcresponder(subject) -> 'MsgRpcResponder':
         """Returns a callback-based subscriber RPC responder
@@ -337,10 +335,33 @@ class Messenger(Singleton):
         return MsgProgressPublisher(subject=subject,
                                     parent=Messenger())
 
+    @staticmethod
+    def get_progressreader(subject,
+                            deliver_policy='last',
+                            stop_when_done: bool = True,
+                            **kwargs) -> 'MsgProgressReader':
+          """Returns a progress reader for a given subject
+
+          Args:
+                subject: subject to read from
+                deliver_policy: deliver policy, in this context 'last' is most useful for progress tracking
+                stop_when_done: whether to stop iteration when all tasks are done
+
+          Returns:
+                MsgProgressReader: a progress reader for the given subject
+          """
+
+          from serverish.messenger.msg_progress_read import MsgProgressReader
+          return MsgProgressReader(subject=subject,
+                                    parent=Messenger(),
+                                    deliver_policy=deliver_policy,
+                                    stop_when_done=stop_when_done,
+                                    **kwargs)
 
 
 class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
+    is_open: bool = param.Boolean(default=False, doc="Has the driver been opened")
     """Message subject operator
 
     Message publisher/subsriber etc base
@@ -363,10 +384,23 @@ class MsgDriver(Manageable):
         return self.messenger.connection
 
     async def open(self) -> None:
-        pass
+        self.is_open = True
 
     async def close(self) -> None:
-        pass
+        self.is_open = False
+
+    @staticmethod
+    def ensure_open(func):
+        @functools.wraps(func)
+        async def wrapper(driver: MsgDriver, *args, **kwargs):
+            # If not open, use context manager
+            if not driver.is_open:
+                async with driver:
+                    return await func(driver, *args, **kwargs)
+            else:
+                return await func(driver, *args, **kwargs)
+
+        return wrapper
 
     async def __aenter__(self):
         await self.open()

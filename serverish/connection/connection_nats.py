@@ -138,11 +138,16 @@ class ConnectionNATS(Connection):
         async def _check_port(host, port) -> Tuple[str, str | None]:
             loop = asyncio.get_event_loop()
             try:
-                # Używamy loop.sock_connect do asynchronicznej operacji
-                await loop.sock_connect(socket.socket(socket.AF_INET, socket.SOCK_STREAM), (host, port))
+                # loop.sock_connect to do it asynchronously
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.setblocking(False)
+                await loop.sock_connect(s, (host, port))
+                s.close()
                 return f"{host}:{port}", None
             except ConnectionRefusedError:
                 return f"{host}:{port}", f'Connection to {host}:{port} refused'
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 return f"{host}:{port}", f'Error: {e}'
 

@@ -58,3 +58,13 @@ Lookup the table below to choose the right class for your needs.
 | `MsgSinglePublisher`    | `MsgSingleReader`       | `get_singlepublisher` `get_singlereader` `single_publish` `single_read` | The classes and methods to publish and read single value. The usecase is e.g. distribution of the config settings dictionary.                                                                                                                                   |
 | `MsgRpcRequester`       | `MsgRpcResponder`       | `get_rpcrequester` `request` `get_rpcresponder`                         | The RPC - Request/Response classes. As an exception, do not use JetStream subject here.                                                                                                                                                                         |
 | `MsgProgressPublisher`  | `MsgProgressReader`     | `get_progresspublisher` `get_progressreader`                            | The classes for remote progress tracking                                                                                                                                                                                                                        |
+
+
+
+# Datatime serialization
+Serverish uses 7-`int` elements lists to represent and serialize datetime. Datatime is considered to be GMT time.
+
+The format of the list is as follows: `[year, month, dayofmonth, hour_0_to_23, minutes, seconds, microseconds]`.
+
+The `base/datatime.py` contains convenience function to convert to and from this format, 
+consult also to `test_datatime.py` for examples.

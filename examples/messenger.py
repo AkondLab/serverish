@@ -5,6 +5,7 @@ import logging
 import time
 from random import random
 
+from serverish.base import dt_utcnow_array
 from serverish.messenger import Messenger, get_publisher, get_reader
 
 logging.basicConfig(level=logging.DEBUG,
@@ -18,12 +19,12 @@ subject = 'test.messanerexample'
 
 async def publisher(n=1000, dt=3.0):
 
-    pub = await get_publisher(subject)
+    pub = get_publisher(subject)
     for _ in range(n):
         t = 20.0 + 10 * random()
         await pub.publish(
             data={
-                'ts': list(time.gmtime()),
+                'ts': dt_utcnow_array(),
                 'measurements': {
                     'temp': t  # Example temperature measurement
                 }
@@ -36,7 +37,7 @@ async def publisher(n=1000, dt=3.0):
 
 
 async def subscriber():
-    sub = await get_reader(subject, deliver_policy='all')
+    sub = get_reader(subject, deliver_policy='all')
     async for msg, meta in sub:
         pass
 

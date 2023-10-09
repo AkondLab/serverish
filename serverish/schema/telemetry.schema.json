@@ -1,9 +1,9 @@
 {
+    "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
     "properties": {
         "ts": {
-            "type": "array",
-            "items": {"type": "integer"}
+            "$ref": "include/timestamp.schema.json"
         },
         "measurements": {
             "type": "object"

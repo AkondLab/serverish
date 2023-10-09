@@ -2,6 +2,8 @@ import asyncio
 import logging
 import time
 from typing import Callable
+
+from serverish.base import dt_utcnow_array
 from serverish.messenger import Messenger, get_publisher, get_reader, get_callbacksubscriber
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -24,7 +26,7 @@ class SendMsg:
                                     'header': {'header': 1,
                                                'header2': 333
                                                },
-                                    'ts': [*time.gmtime()]
+                                    'ts': dt_utcnow_array(),
                                 },
                                 meta={
                                 })
