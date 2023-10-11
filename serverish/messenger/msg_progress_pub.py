@@ -104,13 +104,6 @@ class MsgProgressPublisher(MsgPublisher):
     """
     tasks = param.Dict(default={}, doc="Tasks being tracked")
 
-    async def __aenter__(self):
-        await self.open()
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.close()
-
     async def track(
             self,
             sequence: Iterable[ProgressType] | Sequence[ProgressType],
