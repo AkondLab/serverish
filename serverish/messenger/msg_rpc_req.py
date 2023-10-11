@@ -45,7 +45,6 @@ class MsgRpcRequester(MsgDriver):
             MessengerRequestNoResponders: if no responders were found for the request
             MessengerRequestTimeout: if no response was received in time
         """
-        self.open()
         from nats.aio.client import Client as NATS
 
         nats: NATS = self.connection.nc
