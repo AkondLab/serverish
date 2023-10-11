@@ -93,6 +93,8 @@ class MsgValidator(object):
         dataval.validate(data)
 
     def get_data_validator(self, message_type: str | None) -> DataValidator:
+        # remove dot and anything after it from message_type (message subtype)
+        message_type = message_type.split('.')[0]
         if not message_type:
             message_type = 'default'
         try:

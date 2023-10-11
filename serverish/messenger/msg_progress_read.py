@@ -1,13 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
-import asyncio
-from asyncio import Event, CancelledError
 
-import param
-
-from serverish.base import Task, create_task
 from serverish.messenger import Messenger
 from serverish.messenger.msg_reader import MsgReader
 from serverish.messenger.msg_progress_pub import ProgressTask
@@ -40,7 +34,7 @@ class MsgProgressReader(MsgReader):
     def __aiter__(self):
         return super().__aiter__()
 
-    async def __anext__(self):
+    async def __anext__(self) -> (ProgressTask, dict):
         data, meta = await super().__anext__()
         assert meta['message_type'] == 'progress'
         if 'all-done' in meta['tags'] and self.stop_when_done:

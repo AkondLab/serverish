@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "description": "Unique ID of the journal entry, different actions can be taken on this entry."
+    },
+    "level": {
+      "type": "integer",
+      "description": "Log level of journal entry. Compatible with `logging` module levels."
+    },
+    "message": {
+      "type": "string",
+      "description": "Message of journal record - to be displayed in one-line."
+    },
+    "explanation": {
+      "type": "string",
+      "description": "Optional, longer explanation."
+    },
+    "icon": {
+      "type": "string",
+      "description": "Emoji or symbol icon to be presented, e.g. 🔑."
+    },
+    "op": {
+      "type": "string",
+      "enum": ["publish", "change", "answer", "comment", "delete"],
+      "description": "Publish is the default operation, but another action may follow it on the same conversation_id."
+    },
+    "actions": {
+      "type": "array",
+      "description": "List of actions user can perform on the journal entry as an `answer` operation, e.g. acknowledge",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["conversation_id", "level", "message", "op"]
+}

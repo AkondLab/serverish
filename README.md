@@ -18,6 +18,7 @@ or specify dpendency with extras in the `pip` convention: `serverish[messenger]`
 this will install `nats-py` package.
 
 ## Changes
+* 0.8 Introduces journal publishing/reading API.
 * 0.7 Includes progress tracking messages in the Messenger API.
 * 0.6 introduces breaking changes in the Messenger API:
   * Convenience functions `get_xxxxx()` returning publishers/readers are synchronous now. Remove `await`-ing for their results.

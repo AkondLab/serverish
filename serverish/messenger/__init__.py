@@ -9,3 +9,5 @@ from .msg_rpc_req import get_rpcrequester, request
 from .msg_rpc_resp import get_rpcresponder, Rpc
 from .msg_progress_pub import get_progresspublisher, ProgressTask
 from .msg_progress_read import get_progressreader
+from .msg_journal_pub import get_journalpublisher, JournalEntry
+from .msg_journal_read import get_journalreader

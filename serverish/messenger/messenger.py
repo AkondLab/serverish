@@ -358,6 +358,61 @@ class Messenger(Singleton):
                                     stop_when_done=stop_when_done,
                                     **kwargs)
 
+    @staticmethod
+    def get_journalpublisher(subject) -> 'MsgJournalPublisher':
+        """Returns a journal publisher for a given subject
+
+        Args:
+            subject (str): subject to publish to
+
+        Returns:
+            MsgJournalPublisher: a publisher for the given subject
+
+        """
+        from serverish.messenger.msg_journal_pub import MsgJournalPublisher
+        return MsgJournalPublisher(subject=subject,
+                                   parent=Messenger())
+
+    @staticmethod
+    def get_journalreader(subject,
+                          deliver_policy='new',
+                          **kwargs) -> 'MsgJournalReader':
+        """Returns a journal reader for a given subject
+
+        Args:
+            subject (str): subject to read from
+            deliver_policy (str): deliver policy, one of 'all', 'last', 'new', 'by_start_time', will be passed to consumer config
+            kwargs: additional arguments to pass to the reader and underlying NATS consumer config
+
+        Returns:
+            MsgJournalReader: a journal reader for the given subject
+
+        """
+        from serverish.messenger.msg_journal_read import MsgJournalReader
+        return MsgJournalReader(subject=subject,
+                                    parent=Messenger(),
+                                    deliver_policy=deliver_policy,
+                                    **kwargs)
+
+    def foo(self):
+          """Returns a progress reader for a given subject
+
+          Args:
+                subject: subject to read from
+                deliver_policy: deliver policy, in this context 'last' is most useful for progress tracking
+                stop_when_done: whether to stop iteration when all tasks are done
+
+          Returns:
+                MsgProgressReader: a progress reader for the given subject
+          """
+
+          from serverish.messenger.msg_progress_read import MsgProgressReader
+          return MsgProgressReader(subject=subject,
+                                    parent=Messenger(),
+                                    deliver_policy=deliver_policy,
+                                    stop_when_done=stop_when_done,
+                                    **kwargs)
+
 
 class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
