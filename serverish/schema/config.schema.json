@@ -4,11 +4,22 @@
     "properties": {
         "version": {"type": "string"},
         "published": {
-            "$ref": "include/timestamp.schema.json"
+            "$ref": "#/definitions/timestamp"
         },
         "config": {
             "type": "object"
         }
     },
-    "required": ["version", "published", "config"]
+    "required": ["version", "published", "config"],
+    "definitions": {
+        "timestamp": {
+            "type": "array",
+            "description": "Serverish timestamp as an array (tuple): (Year, Month, Day, hour, minute, second, microsecond).",
+            "items": {
+                "type": "integer"
+            },
+            "minItems": 7,
+            "maxItems": 7
+        }
+    }
 }

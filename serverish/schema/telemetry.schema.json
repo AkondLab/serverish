@@ -3,11 +3,22 @@
     "type": "object",
     "properties": {
         "ts": {
-            "$ref": "include/timestamp.schema.json"
+            "$ref": "#/definitions/timestamp"
         },
         "measurements": {
             "type": "object"
         }
     },
-    "required": ["ts", "measurements"]
+    "required": ["ts", "measurements"],
+    "definitions": {
+        "timestamp": {
+            "type": "array",
+            "description": "Serverish timestamp as an array (tuple): (Year, Month, Day, hour, minute, second, microsecond).",
+            "items": {
+                "type": "integer"
+            },
+            "minItems": 7,
+            "maxItems": 7
+        }
+    }
 }
