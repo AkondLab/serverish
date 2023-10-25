@@ -104,7 +104,7 @@ class MsgRpcResponder(MsgDriver):
                 else:
                     ret = await acb(rpc)
             except Exception as e:
-                log.exception(f'Error in callback {callback} for message {meta}{data:20}: {e}')
+                log.exception(f'Error in callback {callback} for message {meta}{str(data):20}: {e}')
                 if not rpc.answered:
                     rpc.set_response(data=None, meta={'status': 'error', 'error': f'{e}'})
             if ret is not None:

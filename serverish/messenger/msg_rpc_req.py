@@ -163,6 +163,9 @@ async def request(subject,
         data (dict): message data
         meta (dict): message metadata
         timeout (float): time to wait for a response, None to wait forever
+
+    Returns:
+        tuple: response message data and metadata
     """
     pub = get_rpcrequester(subject)
     return await pub.request(data, meta=meta, timeout=timeout)
