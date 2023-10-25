@@ -56,6 +56,18 @@ class Connection(HasStatuses):
         return bool(cls.r_ip.match(host))
 
 
+    @staticmethod
+    async def _check_host(resolver, h):
+        try:
+            await resolver.gethostbyname(h, socket.AF_INET)
+            return None
+        except aiodns.error.DNSError as e:
+            try:
+                return f'{h}: {e.args[1]}'
+            except (IndexError, TypeError, AttributeError):
+                return f'{h}: {e}'
+
+
     async def diagnose_dns(self) -> Status:
         """ Diagnoses DNS connection
 
@@ -63,21 +75,12 @@ class Connection(HasStatuses):
             Status: Status object, named 'dns'
         """
 
-        async def _resolve_host(resolver, h):
-            try:
-                await resolver.gethostbyname(h, socket.AF_INET)
-                return None
-            except aiodns.error.DNSError as e:
-                try:
-                    return f'{h}: {e.args[1]}'
-                except (IndexError, TypeError, AttributeError):
-                    return f'{h}: {e}'
 
         if len(self.host) == 0:
             return Status.new_na(msg='No hosts to check DNS for')
 
         resolver = aiodns.DNSResolver()
-        tasks = [_resolve_host(resolver, h) for h in self.host if not self.is_ip(h)]
+        tasks = [self._check_host(resolver, h) for h in self.host if not self.is_ip(h)]
         results = await asyncio.gather(*tasks)
 
         checked = len(results)
