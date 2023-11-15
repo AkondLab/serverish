@@ -1,7 +1,6 @@
 import logging
 import asyncio
 import datetime
-import logging
 
 import pytest
 
@@ -24,7 +23,7 @@ async def test_messenger_pub_sub_cb():
 
     msgs = []
     def cb(data, meta):
-        print(data, sub)
+        logging.debug(f'TEST: Got message {data} {meta}')
         msgs.append(data)
         return True
 

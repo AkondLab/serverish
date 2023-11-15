@@ -197,6 +197,7 @@ class MsgReader(MsgDriver):
         return consumer_conf
 
     async def close(self) -> None:
+        log.info('Closing')
         await super().close()
         await self._close_pull_subscription()
         await self._close_push_subscription()
