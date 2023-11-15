@@ -32,7 +32,7 @@ class MsgJournalReader(MsgReader):
 
 
 def get_journalreader(subject: str,
-                        deliver_policy='last',
+                      deliver_policy='last',
                       **kwargs) -> 'MsgJournalReader':
     """Returns a journal reader for a given subject
 

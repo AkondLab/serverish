@@ -51,13 +51,78 @@ There are convenient methods and functions for obtaining those classes instances
 
 Lookup the table below to choose the right class for your needs.
 
-| Publish class           | Read class              | Functions                                                               | Description and use-cases                                                                                                                                                                                                                                       |
-|-------------------------|-------------------------|-------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `MsgPublisher`          | `MsgReader`             | `get_publisher` `get_reader`                                            | The most general classes. Suitable for publishing / reading multiple messages. For reader it can be used for existing and future messages. It creates pull-consumer for existing messages and automatically switches to push consumer waiting for new messages. |
-|                         | `MsgCallbackSubscriber` | `get_callbacksubscriber`                                                | Use this class insted of `MsgReader` if you prefer callback oriented approach rather than (recommended) iteration using `MsgReader`.                                                                                                                            |
-| `MsgSinglePublisher`    | `MsgSingleReader`       | `get_singlepublisher` `get_singlereader` `single_publish` `single_read` | The classes and methods to publish and read single value. The usecase is e.g. distribution of the config settings dictionary.                                                                                                                                   |
-| `MsgRpcRequester`       | `MsgRpcResponder`       | `get_rpcrequester` `request` `get_rpcresponder`                         | The RPC - Request/Response classes. As an exception, do not use JetStream subject here.                                                                                                                                                                         |
-| `MsgProgressPublisher`  | `MsgProgressReader`     | `get_progresspublisher` `get_progressreader`                            | The classes for remote progress tracking                                                                                                                                                                                                                        |
+| Publish class               | Read class              | Functions                                                               | Description and use-cases                                                                                                                                                                                                                                       |
+|-----------------------------|-------------------------|-------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `MsgPublisher`              | `MsgReader`             | `get_publisher` `get_reader`                                            | The most general classes. Suitable for publishing / reading multiple messages. For reader it can be used for existing and future messages. It creates pull-consumer for existing messages and automatically switches to push consumer waiting for new messages. |
+|                             | `MsgCallbackSubscriber` | `get_callbacksubscriber`                                                | Use this class insted of `MsgReader` if you prefer callback oriented approach rather than (recommended) iteration using `MsgReader`.                                                                                                                            |
+| `MsgSinglePublisher`        | `MsgSingleReader`       | `get_singlepublisher` `get_singlereader` `single_publish` `single_read` | The classes and methods to publish and read single value. The usecase is e.g. distribution of the config settings dictionary.                                                                                                                                   |
+| `MsgRpcRequester`           | `MsgRpcResponder`       | `get_rpcrequester` `request` `get_rpcresponder`                         | The RPC - Request/Response classes. As an exception, do not use JetStream subject here.                                                                                                                                                                         |
+| `MsgProgressPublisher`      | `MsgProgressReader`     | `get_progresspublisher` `get_progressreader`                            | The classes for remote progress tracking                                                                                                                                                                                                                        |
+| `MsgJournalPublisher`       | `MsgJournalReader`      | `get_journalpublisher` `get_journalreader`                              | The classes for writing and reading messages for human operator                                                                                                                                                                                                 |
+| `NatsJournalLoggingHandler` |                         | `logger.log` `logger.info` etc.                                         |                                                                                                                                                                                                                                                                 |
+
+
+# Logging to the nats server (Messanger)
+For writing Journal entries - human-readable messages, use `MsgJournalPublisher` class or use python logging.
+
+## Logging via `logging` module
+To configure python logging to write to the nats server, use `NatsJournalLoggingHandler` class.
+
+Example:
+
+```python   
+import logging
+from serverish.messenger import NatsJournalLoggingHandler
+
+subject = "my_journal_subject"
+logger_nats = logging.getLogger('my_nats_journal_logger')
+logger_root = logging.getLogger()
+logger_nats.addHandler(NatsJournalLoggingHandler(subject))
+logger_nats.info("Hello world!")  # that goes to the nats "my_journal_subject" subject
+logger_root.info("Hello world!")  # that goes to the local log
+```
+
+## Writing  via `MsgJournalPublisher` class
+
+If you decide to use `MsgJournalPublisher` class, you have additional control over the message. E.g.:
+
+```python
+from serverish.messenger import get_journalpublisher
+
+subject = "my_journal_subject"
+publisher = get_journalpublisher(subject)
+
+await publisher.info("Hello world!")  # that goes to the nats "my_journal_subject" subject
+await publisher.warning(
+    message="Its important!",
+    explanation="This is longer explanation, maybe it is going to be displayed on tooltip or in statusline?",
+    icon="😅"
+)
+
+```
+
+## Reading and displaying
+To read and display the messages, use `MsgJournalReader` class. In the `async for` approach, the easiest way is to 
+constitute the asyncio task with the `async for` loop over the reader. E.g.:
+
+```python
+import asyncio
+from serverish.messenger import get_journalreader
+
+subject = "my_journal_subject"
+reader = get_journalreader(subject)
+
+async def read_and_display():
+    async for entry, meta in reader:
+        print(entry.icon, entry.message)
+        # exchange above for more sophisticated display approprate for your application UI framework
+        
+task = asyncio.create_task(read_and_display())
+
+
+# ... later, when you want to stop reading
+reader.stop()  # that will finish the `async for` loop, thus the task will finish
+```
 
 
 
