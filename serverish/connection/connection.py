@@ -5,7 +5,6 @@ import re
 import socket
 from typing import Iterable
 
-import aiodns
 import param
 from serverish.base.hasstatuses import HasStatuses
 from serverish.base.status import Status
@@ -58,6 +57,7 @@ class Connection(HasStatuses):
 
     @staticmethod
     async def _check_host(resolver, h):
+        import aiodns
         try:
             await resolver.gethostbyname(h, socket.AF_INET)
             return None
@@ -74,6 +74,10 @@ class Connection(HasStatuses):
         Returns:
             Status: Status object, named 'dns'
         """
+        try:
+            import aiodns
+        except ImportError:
+            return Status.new_na(msg='aiodns not installed, skipping DNS check')
 
 
         if len(self.host) == 0:
