@@ -1,11 +1,20 @@
 """ Those functions are used to convert datetime objects to array representation
-(list similar to time tuple) and vice versa.
+(7-element list, similar to time tuple) and vice versa.
 
-This repetition is chosen for serializing datetime to JSON as fast and easy to process."""
+This representation is chosen for serializing datetime to JSON as fast and easy to process.
+We are using list instead of tuple for smooth conversion to/from JSON.
+
+The meaning of the elements of the array is as follows:
+[year, month, day, hour, minute, second, microsecond]
+This is compatible with the datetime constructor, e.g.:
+   dt = datetime(*array)
+but you have also the convenience function:
+    dt = dt_from_array(array)
+to do the same preserving None.
+"""
 
 from __future__ import annotations
 
-from time import struct_time, mktime
 from datetime import datetime
 from typing import Sequence
 
@@ -38,6 +47,8 @@ def dt_ensure_datetime(dt: datetime | Sequence | None) -> datetime | None:
     else:
         return dt_from_array(dt)
 
+
 def dt_utcnow_array() -> list:
     dt = datetime.utcnow()
     return dt_to_array(dt)
+

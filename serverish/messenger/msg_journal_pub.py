@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Sequence
 
 import param
 
+from serverish.base import dt_ensure_array, dt_utcnow_array
 from serverish.base.idmanger import gen_uid
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
@@ -20,6 +23,7 @@ class JournalEntry:
     conversation_id: str
     level: int
     message: str
+    timestamp: list[int]
     explanation: str = field(default=None)
     icon: str = field(default=None)
     actions: list[str] = field(default_factory=list)
@@ -30,6 +34,7 @@ class JournalEntry:
             'conversation_id': self.conversation_id,
             'level': self.level,
             'message': self.message,
+            'timestamp': self.timestamp
         }
         if self.explanation:
             d['explanation'] = self.explanation
@@ -79,6 +84,7 @@ class MsgJournalPublisher(MsgPublisher):
                   explanation: str | None = None,
                   icon: str | None = None,
                   actions: list[str] | None = None,
+                  timestamp: datetime | Sequence | None = None,
                   meta: dict | None = None
                   ) -> JournalEntry:
         """Log a message to the journal.
@@ -90,13 +96,17 @@ class MsgJournalPublisher(MsgPublisher):
             explanation (str, optional): Detailed explanation. Defaults to None.
             icon (str, optional): Icon to display. Defaults to None.
             actions (list[str], optional): List of actions to display. Defaults to None.
+            timestamp (datetime | Sequence | None, optional): Timestamp of the message. Defaults to None.
             meta (dict, optional): Additional metadata to publish. Defaults to None.
         """
+        if timestamp is None:
+            timestamp = dt_utcnow_array()
         entry = JournalEntry(
             driver=self,
             conversation_id=gen_uid('journal'),
             level=self.checkLevel(level),
             message=message.format(*args),
+            timestamp=dt_ensure_array(timestamp),
             explanation=explanation,
             icon=icon,
             actions=actions
