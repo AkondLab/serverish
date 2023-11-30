@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 import param
 
-from serverish.base import dt_utcnow_array, dt_from_array
+from serverish.base import dt_utcnow_array, dt_from_array, Task, create_task
 from serverish.base.collector import Collector
 from serverish.connection.connection_jets import ConnectionJetStream
 from serverish.base.idmanger import gen_id
@@ -55,6 +55,22 @@ class Messenger(Singleton):
         return self.conn
 
     async def open(self, host: str | None = None, port: int | None = None):
+        """Opens a connection to NATS
+
+        Should be called before any other method, directly or via context manager:
+            async with Messenger().context(host, port) as msg:
+                await msg.publish(...)
+                # and do your stuff utilizing the messenger
+
+        If the connection can not be established, this method weii keep trying to connect, and not return until
+        the connection is established.
+
+        If you want to have the control back, even before the connection is established, use schedule_open() instead.
+
+        Args:
+            host (str): Hostname or IP address
+            port (int): Port number
+        """
         if host is None:
             host = self.default_host
         if port is None:
@@ -63,6 +79,28 @@ class Messenger(Singleton):
             log.warning("Messenger Connection already opened, ignoring")
         self.conn = ConnectionJetStream(host, port)
         await self.conn.connect()
+
+    async def schedule_open(self, host: str | None = None, port: int | None = None) -> Task:
+        """Schedules a connection to NATS
+
+        Non-blocking version of open(), will return immediately, and try to connect in the background.
+
+        The method creates a task that will encapsulate the Messenger.open() call, and return it.
+        Use Messenger.is_open to check if the connection is established or wait for the returned task to finish.
+
+        Args:
+            host (str): Hostname or IP address
+            port (int): Port number
+
+        Returns:
+            Task: task that will connect to NATS
+        """
+        # Create serverish task with the open ,method running:
+        task = await create_task( self.open(host, port), "Messenger opener still trying")
+        # Return the task to the caller:
+        return task
+
+
 
     async def close(self):
         if self.conn is not None:

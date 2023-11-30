@@ -19,6 +19,14 @@ class Task(HasStatuses):
     task = param.ClassSelector(default=None, class_=asyncio.Task, allow_None=True, doc='Asyncio task')
 
     def __init__(self, name, coro, parent: Collector = None, **kwargs) -> None:
+        try:
+            if not kwargs.pop('i_know_what_i_am_doing'):
+                raise RuntimeError('You have to use create_task()')
+        except KeyError:
+            raise RuntimeError('Use create_task() function to create tasks '
+                               '(or, if you realy know what you are doing, pass i_know_what_i_am_doing=True))')
+
+
         self.coro = coro
         super().__init__(name=name, parent=parent, **kwargs)
         # self.set_check_methods(ping=self.diagnose_ping, dns=self.diagnose_dns)
@@ -52,7 +60,7 @@ class TaskManager(Singleton):
 
     async def create_task(self, coro, name: str, class_=Task) -> Task:
         """Creates task, like asyncio.create_task, but tracked"""
-        task = class_(coro=coro, name=name, parent=self)
+        task = class_(coro=coro, name=name, parent=self, i_know_what_i_am_doing=True)
         await task.start()
         return task
 

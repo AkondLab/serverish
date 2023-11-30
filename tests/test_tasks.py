@@ -3,7 +3,8 @@ from random import random
 
 import pytest
 
-from serverish.base import create_task, TaskManager
+from serverish.base import create_task, TaskManager, Task
+
 
 @pytest.mark.asyncio
 async def test_tasks_cancel_all():
@@ -27,3 +28,11 @@ async def test_tasks_cancel_all():
 
 def test_tasks_cancel_all_s():
     asyncio.run(test_tasks_cancel_all())
+
+def test_tasks_direct_constructor_call():
+    """ You should not directly call Task() constructor, or probide `i_know_what_i_am_doing=True`:"""
+    with pytest.raises(RuntimeError):
+        Task('test', None)
+    with pytest.raises(RuntimeError):
+        Task('test', None, i_know_what_i_am_doing=False)
+    Task('test', None, i_know_what_i_am_doing=True)

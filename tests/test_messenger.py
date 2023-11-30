@@ -4,6 +4,7 @@ import logging
 
 import pytest
 
+from serverish.base import Task
 from serverish.messenger import Messenger, get_publisher, get_reader
 from tests.test_connection import ci
 from tests.test_nats import is_nats_running
@@ -163,6 +164,22 @@ async def test_messenger_pub_time_pub_sub():
         await pub.close()
         await sub.close()
     assert len(collected) == 11 # only the 11 published after `now`
+
+
+@pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_messenger_sheduled_open():
+    """Test that messenger will open using sheduled_open, wait for beeing open, checks if is open then  close itself"""
+    msg = Messenger()
+    t = await msg.schedule_open(host='localhost', port=4222)
+    await t.task
+    assert msg.is_open
+    await msg.close()
+
+
+
+
 
 #
 # @pytest.mark.asyncio  # This tells pytest this test is async
