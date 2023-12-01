@@ -33,7 +33,10 @@ class MsgPublisher(MsgDriver):
         try:
             await self.connection.js.publish(self.subject, bdata, **kwargs)
         except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError):
-            # it's OK, we just don't have subscribers yet
+            # it's OK for non-jetstream, we just don't have subscribers yet
+            log.debug(
+                f'No subscribers yet returned by NATS server for subject {self.subject}, '
+                f'if it was ment to be jetstream, the subject does not exist in any stream!')
             pass
         except Exception as e:
             log.error(f"Trying to publish to subject '{self.subject}' failed. "
