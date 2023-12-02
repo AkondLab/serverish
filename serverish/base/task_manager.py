@@ -46,6 +46,10 @@ class Task(HasStatuses):
         if self.task is not None:
             self.task.cancel()
 
+    def __await__(self):
+        """Awaiting task"""
+        return self.task.__await__()
+
 
 async def create_task(coro, name: str, class_=Task) -> Task:
     """Creates task, like asyncio.create_task, but tracked"""

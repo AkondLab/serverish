@@ -36,3 +36,15 @@ def test_tasks_direct_constructor_call():
     with pytest.raises(RuntimeError):
         Task('test', None, i_know_what_i_am_doing=False)
     Task('test', None, i_know_what_i_am_doing=True)
+
+def test_task_await_method():
+    """ Tests awaiting serverish.base.Task object to check if the `__await__` method is implemented properly"""
+    async def task():
+        await asyncio.sleep(0.1)
+        return 1
+
+    async def test():
+        t = await create_task(task(), 'test_task_await_method')
+        assert await t == 1
+
+    asyncio.run(test())
