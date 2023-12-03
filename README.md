@@ -18,6 +18,10 @@ or specify dpendency with extras in the `pip` convention: `serverish[messenger]`
 this will install `nats-py` package.
 
 ## Changes
+* 0.11 Extends, tasks, NATS connection tracking and messenger opening options (`Messenger.open`)
+* 0.10 Adds timestamp to journal messages and extablishes schema for journal messages.
+* 0.9.1 Makes dependency to aiodns optional.
+* 0.9.0 Introduces Logging handler for passing standard logging messages to the Messenger.
 * 0.8 Introduces journal publishing/reading API.
 * 0.7 Includes progress tracking messages in the Messenger API.
 * 0.6 introduces breaking changes in the Messenger API:

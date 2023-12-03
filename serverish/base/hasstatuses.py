@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, Union
 
 import param
 
@@ -11,7 +11,7 @@ from serverish.base.status import Status, StatusEnum
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
-CheckMethodType = Callable[[], Awaitable[Status] | Status]
+CheckMethodType = Callable[[], Union[Awaitable[Status], Status]]
 
 class HasStatuses(Manageable):
     """Controls the resource
