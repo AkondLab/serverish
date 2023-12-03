@@ -291,6 +291,8 @@ def get_reader(subject: str,
 
     Args:
         subject (str): subject to subscribe to
+        deliver_policy (str): deliver policy, one of 'all', 'last', 'new', 'by_start_time', will be passed to consumer config
+        opt_start_time (datetime): start time for 'by_start_time' deliver policy, will be passed to consumer config
         kwargs: additional arguments to pass to the consumer config
 
     Returns:

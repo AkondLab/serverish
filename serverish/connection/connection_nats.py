@@ -38,26 +38,27 @@ class ConnectionNATS(Connection):
                                nats_init=self.diagnose_initialized,
                                nats_server = self.diagnose_nats_server_port,
                                )
+        # self.status['nats'] = Status.new_na(msg='Not initialized')
 
     async def nats_error_cb(self, e: Exception):
         """Error callback for NATS connection"""
         await self.update_statuses()
-        _logger.error(f'NATS error: {e}, Status: {self.format_status()}')
+        _logger.debug(f'NATS error: {e}, Status: {self.format_status()}')
 
     async def nats_disconnected_cb(self):
         """Disconnected callback for NATS connection"""
         await self.update_statuses()
-        _logger.info(f'NATS disconnected: Status: {self.format_status()}')
+        _logger.info(f'NATS disconnected')
 
     async def nats_reconnected_cb(self):
         """Reconnected callback for NATS connection"""
         await self.update_statuses()
-        _logger.warning(f'NATS reconnected: Status: {self.format_status()}')
+        _logger.info(f'NATS reconnected: Status: {self.format_status()}')
 
     async def nats_closed_cb(self):
         """Closed callback for NATS connection"""
         await self.update_statuses()
-        _logger.info(f'NATS closed: Status: {self.format_status()}')
+        _logger.info(f'NATS closed')
 
     async def connect(self, **kwargs):
         """Connects to NATS server
@@ -102,7 +103,8 @@ class ConnectionNATS(Connection):
     async def disconnect(self):
         """Disconnects from NATS server"""
         if self.nc is not None:
-            await self.nc.close()
+            if self.nc.is_connected:
+                await self.nc.close()
             self.nc = None
 
     async def __aenter__(self):
@@ -113,7 +115,7 @@ class ConnectionNATS(Connection):
         await self.disconnect()
 
 
-    async def diagnose_initialized(self) -> Status:
+    def diagnose_initialized(self) -> Status:
         """Diagnoses initialization
 
         Returns:
@@ -123,7 +125,7 @@ class ConnectionNATS(Connection):
             return Status.new_fail(msg='Not initialized')
         return Status.new_ok(msg='Initialized', deduce_other=False)
 
-    async def diagnose_nats_connected(self) -> Status:
+    def diagnose_nats_connected(self) -> Status:
         """Diagnoses NATS connection
         Returns:
             Status: Status object, named 'nats'

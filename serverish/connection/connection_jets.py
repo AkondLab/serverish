@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Mapping, Any
+from typing import Mapping, Any, Iterable
 import re
 
 import nats
@@ -29,15 +29,15 @@ class ConnectionJetStream(ConnectionNATS):
     js = param.ClassSelector(class_=JetStreamContext, allow_None=True)
 
     def __init__(self,
-                 host: str, port: int = 4222,  # Connection parameters
+                 host: str | Iterable[str], port: int | Iterable[int] = 4222,
                  subject_prefix: str = 'srvh',  # NATS parameters
                  streams: Mapping[str, Mapping[str, Any]] | None = None,  # JetStream parameters
                  **kwargs):
         """Initializes connection watcher
 
         Args:
-            host (str): Hostname or IP address
-            port (int): Port number
+            host (str): Hostname(s) or IP address(es)
+            port (int): Port number(s)
             subject_prefix (str): Prefix for all subjects
             streams (Mapping[str, Mapping[str, Any]]):
                 JetStream streams to be created as mapping of stream name to stream parameters.

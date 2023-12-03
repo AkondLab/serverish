@@ -49,6 +49,8 @@ class Connection(HasStatuses):
         super().__init__(host=host, port=port, **kwargs)
         self.set_check_methods(ping=self.diagnose_ping, dns=self.diagnose_dns)
 
+
+
     @classmethod
     def is_ip(cls, host) -> bool:
         """Returns True if host is just IP address, not a hostname """

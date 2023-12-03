@@ -169,43 +169,26 @@ async def test_messenger_pub_time_pub_sub():
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_messenger_sheduled_open():
-    """Test that messenger will open using sheduled_open, wait for beeing open, checks if is open then  close itself"""
+async def test_messenger_scheduled_open():
+    """Test that messenger will open using scheduled_open, wait for beeing open, checks if is open then  close itself"""
     msg = Messenger()
-    t = await msg.schedule_open(host='localhost', port=4222)
+    t = await msg.open(host='localhost', port=4222, wait=False)
+    assert not msg.is_open
     await t.task
     assert msg.is_open
     await msg.close()
+    assert not msg.is_open
+
+@pytest.mark.asyncio  # This tells pytest this test is async
+async def test_messenger_scheduled_open_fail():
+    """Test that messenger will open using scheduled_open, wait for beeing open, checks if is open then  close itself"""
+    msg = Messenger()
+    t = await msg.open(host='localhost', port=4225, wait=False)
+    assert not msg.is_open
+    with pytest.raises(TimeoutError):
+        await t.wait_for(0.1)
+    assert not msg.is_open
+    await msg.close()
+    assert not msg.is_open
 
 
-
-
-
-#
-# @pytest.mark.asyncio  # This tells pytest this test is async
-# @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-# async def test_messenger_cm():
-#
-#     async def subsciber_task(sub):
-#         async for msg in sub:
-#             print(msg.data)
-#             if msg.data['final']:
-#                 break
-#
-#     async def publisher_task(pub):
-#         for i in range(10):
-#             await pub.publish(data={'n': i, 'final': False})
-#             await asyncio.sleep(0.1)
-#         await pub.publish(data={'n': 10, 'final': True})
-#
-#     async with get_publisher('test.messenger') as pub, get_subscriber('test.messenger', deliver_policy='new') as sub:
-#         await asyncio.gather(subsciber_task(sub), publisher_task(pub))
-#
-# @pytest.mark.asyncio  # This tells pytest this test is async
-# @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-# async def test_progrssor_cm2():
-#
-#     prog = await get_messenger('test.messenger')
-#     sub = await get_subscriber('test.messenger', deliver_policy='new')
-#
-#

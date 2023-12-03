@@ -10,6 +10,7 @@ Functions:
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import json
@@ -25,6 +26,7 @@ from serverish.base.idmanger import gen_id
 from serverish.base.manageable import Manageable
 from serverish.messenger.msgvalidator import MsgValidator
 from serverish.base.singleton import Singleton
+from serverish.base import MessengerCannotConnect
 
 if TYPE_CHECKING:
     from serverish.messenger.msg_publisher import MsgPublisher
@@ -46,6 +48,7 @@ class Messenger(Singleton):
 
     def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
         self.validator = MsgValidator()
+        self.opener_task: Task | None = None
         super().__init__(name, parent, **kwargs)
 
     @property
@@ -54,51 +57,83 @@ class Messenger(Singleton):
             raise ValueError("Messenger connection have not been opened, use configure(host, port) first")
         return self.conn
 
-    async def open(self, host: str | None = None, port: int | None = None):
+    async def open(self, host: str | None = None, port: int | None = None,
+                   wait: float | bool = True, timeout: float | None = None) -> Task | None:
         """Opens a connection to NATS
 
-        Should be called before any other method, directly or via context manager:
+        Should be called before any other `Messenger` method, directly or via context manager:
             async with Messenger().context(host, port) as msg:
                 await msg.publish(...)
                 # and do your stuff utilizing the messenger
 
-        If the connection can not be established, this method weii keep trying to connect, and not return until
-        the connection is established.
+        If the connection can not be established, this method will keep trying to connect until `timeout`,
+        if `timeout == None` (default), it will keep trying forever.
 
-        If you want to have the control back, even before the connection is established, use schedule_open() instead.
+        If `wait` is a number, if the connection can not be established after `wait` seconds, method will return
+        and the connection will be established in the background (`timeout` still applies).
+        Note, that `wait == False is equivalent to `wait == 0`, and will return immediately, without waiting for the
+        connection to be established.
+        Also note, that if `wait` is a number or `False`, the method will return without ensuring that the connection
+        is established, and the caller will have to check `Messenger.is_open` or wait for the returned task to finish.
 
         Args:
             host (str): Hostname or IP address
             port (int): Port number
+            wait (float or bool): if True, will wait for the connection to be established,
+                if False, will return immediately,
+                if a number, will wait for given number of seconds or until the connection is established,
+                whatever happens first
+            timeout (float or None): if wait is a number, will keep trying to connect for given number of seconds,
+                if None, will keep trying forever (good for server applications)
+
+        Returns:
+            severish.base.Task or None: task that will connect to NATS in background,
+                or None if connection has been established
+
+        Raises:
+            MessengerCannotConnect: if the connection can not be established after `timeout` seconds
+                (only if connecting has not been backgrounded)
         """
+
+
         if host is None:
             host = self.default_host
         if port is None:
             port = self.default_port
         if self.conn is not None:
             log.warning("Messenger Connection already opened, ignoring")
+            return None
         self.conn = ConnectionJetStream(host, port)
-        await self.conn.connect()
+        await self.conn.update_statuses()
+
+        task = await create_task(self._open(self.conn, timeout), f"Messenger wait for open {host}:{port}")
+        try:
+            await task.wait_for(wait, cancel_on_timeout=False)
+        except asyncio.TimeoutError:
+            log.info(f"Backgrounding connection to NATS {host}:{port}")
+        if self.opener_task.done():
+            if self.opener_task.cancelled():
+                raise MessengerCannotConnect(f"Could not connect to NATS {host}:{port}, gave up after {timeout} seconds")
+            else:
+                self.opener_task = None
+        return task
+
+
+    async def _open(self, con, timeout):
+        self.opener_task = await create_task(con.connect(), f"Messenger NATS connection opener {con.host}:{con.port}")
+        try:
+            await self.opener_task.wait_for(timeout)
+        except asyncio.TimeoutError:
+            log.warning(f"Time out connecting to NATS {con.host}:{con.port} after {timeout} seconds")
+            raise
+        except asyncio.CancelledError:
+            log.warning(f"Cancelled connecting to NATS {con.host}:{con.port}")
+            raise
+        log.info(f"Connected to NATS {con.host}:{con.port}")
 
     async def schedule_open(self, host: str | None = None, port: int | None = None) -> Task:
-        """Schedules a connection to NATS
-
-        Non-blocking version of open(), will return immediately, and try to connect in the background.
-
-        The method creates a task that will encapsulate the Messenger.open() call, and return it.
-        Use Messenger.is_open to check if the connection is established or wait for the returned task to finish.
-
-        Args:
-            host (str): Hostname or IP address
-            port (int): Port number
-
-        Returns:
-            Task: task that will connect to NATS
-        """
-        # Create serverish task with the open ,method running:
-        task = await create_task( self.open(host, port), "Messenger opener still trying")
-        # Return the task to the caller:
-        return task
+        # removed from 0.11.0
+        raise NotImplementedError('schedule_open has been removed from Messenger from version 0.11.0, use open instead')
 
 
 
@@ -109,15 +144,16 @@ class Messenger(Singleton):
 
     @property
     def is_open(self) -> bool:
-        return self.conn is not None
+        return self.conn is not None and self.conn.status_ok()
 
     @contextlib.asynccontextmanager
-    async def context(self, host: str | None, port: int | None):
+    async def context(self, host: str | None, port: int | None, timeout: float | None = None):
         """Context manager for connection
 
         Args:
             host (str): Hostname or IP address
             port (int): Port number
+            timeout (float or None): if wait is a number, will keep trying to connect for given number of seconds,
 
         Returns:
             Messenger: self
@@ -127,7 +163,7 @@ class Messenger(Singleton):
             async with msg.context(host, port) as msg:
                 pass # do something
         """
-        await self.open(host, port)
+        await self.open(host, port, timeout=timeout)
         try:
             yield self
         finally:

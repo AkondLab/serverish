@@ -50,6 +50,42 @@ class Task(HasStatuses):
         """Awaiting task"""
         return self.task.__await__()
 
+    def done(self):
+        """Returns True if task is done"""
+        return self.task.done()
+
+    def cancelled(self):
+        """Returns True if task is canceled"""
+        return self.task.cancelled()
+
+    def result(self):
+        """Returns task result"""
+        return self.task.result()
+
+    def exception(self):
+        """Returns task exception"""
+        return self.task.exception()
+
+    async def wait_for(self, timeout: float = None, cancel_on_timeout: bool = True):
+        """Waits for task to finish, with timeout
+
+        If timeout passed, task is canceled and Timeout exception is raised
+        If cancel_on_timeout is False, task is not canceled after timeout, but method returns"""
+
+        if not self.task.done():
+            if not cancel_on_timeout:
+                t = asyncio.shield(self.task)
+            else:
+                t = self.task
+            try:
+                await asyncio.wait_for(t, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.debug(f'wait_for Task {self.name} timeout (task canceling:{cancel_on_timeout})')
+                raise
+            except asyncio.CancelledError:
+                logger.debug(f'wait_for Task {self.name} canceled (task canceling:{cancel_on_timeout})')
+                raise
+
 
 async def create_task(coro, name: str, class_=Task) -> Task:
     """Creates task, like asyncio.create_task, but tracked"""
