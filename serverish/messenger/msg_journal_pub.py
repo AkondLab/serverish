@@ -66,7 +66,10 @@ class MsgJournalPublisher(MsgPublisher):
             rv = level
         elif str(level) == level:
             if cls._nameToLevel is None:
-                cls._nameToLevel = logging.getLevelNamesMapping()
+                try:
+                    cls._nameToLevel = logging.getLevelNamesMapping()
+                except AttributeError:  # Python 3.11 introduced getLevelNamesMapping
+                    cls._nameToLevel = logging._nameToLevel
                 if 'NOTICE' not in cls._nameToLevel:
                     cls._nameToLevel['NOTICE'] = 25
             if level not in cls._nameToLevel:
