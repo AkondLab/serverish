@@ -34,3 +34,8 @@ def test_now_array():
 
     # Wartości z before i after są granicami dla wartości z now_array
     assert before <= datetime(*result) <= after
+
+def test_all_timestamps():
+    # Old 9-elements format
+    arr = [2023, 12, 9, 1, 33, 21, 5, 343, 0]
+    assert dt_from_array(arr) == datetime(2023, 12, 9, 1, 33, 21, 5)

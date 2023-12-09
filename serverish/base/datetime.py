@@ -29,7 +29,10 @@ def dt_to_array(dt: datetime | None) -> list | None:
 def dt_from_array(t: Sequence | None) -> datetime | None:
     if not t:
         return None
-    return datetime(*t)
+    try:
+        return datetime(*t)
+    except TypeError:  # Old 9-position format?
+        return datetime(*t[:7])
 
 
 def dt_ensure_array(dt: datetime | Sequence | None) -> list | None:
