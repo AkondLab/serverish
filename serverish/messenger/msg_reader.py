@@ -111,7 +111,7 @@ class MsgReader(MsgDriver):
                     msg = self.messenger.decode(bmsg.data)
                     self.messenger.log_msg_trace(msg, f"SUB PUSH iteration from {self.subject}")
                     data, meta = self.messenger.split_msg(msg)
-                    if meta['id'] in self.id_cache:
+                    if f'{meta["id"]}{meta["ts"]}' in self.id_cache:
                         log.debug(f"Skipping duplicated message from {self.subject}")
                         bmsg = msg = data = meta = None
                         continue
@@ -127,10 +127,11 @@ class MsgReader(MsgDriver):
             log.debug(f"No message to return, closing {self}")
             await self.close()
             raise MessengerReaderStopped
+        cachedid = f'{meta["id"]}{meta["ts"]}'
         try:
-            self.id_cache.add(meta['id'])
+            self.id_cache.add(cachedid)
         except Exception as e:
-            log.error(f"Error adding id of msg: data={data} meta={meta} to id_cache: {e}")
+            log.error(f"Error adding id: {cachedid} of msg: data={data} meta={meta} to id_cache: {e}")
         log.debug(f"Returning message {self}")
         self._msg_processed.set()
         return data, meta

@@ -180,6 +180,8 @@ async def test_messenger_scheduled_open():
     assert not msg.is_open
 
 @pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_scheduled_open_fail():
     """Test that messenger will open using scheduled_open, wait for beeing open, checks if is open then  close itself"""
     msg = Messenger()
