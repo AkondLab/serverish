@@ -35,18 +35,24 @@ def dt_from_array(t: Sequence | None) -> datetime | None:
         return datetime(*t[:7])
 
 
-def dt_ensure_array(dt: datetime | Sequence | None) -> list | None:
+def dt_ensure_array(dt: datetime | Sequence | float | None) -> list | None:
+    """Supports datetime, array, float (timestamp) and None"""
     if dt is None:
         return None
     elif isinstance(dt, datetime):
         return dt_to_array(dt)
+    elif isinstance(dt, float):
+        return dt_to_array(datetime.utcfromtimestamp(dt))
     else:
         return list(dt)
 
 
-def dt_ensure_datetime(dt: datetime | Sequence | None) -> datetime | None:
+def dt_ensure_datetime(dt: datetime | Sequence | float | None) -> datetime | None:
+    """Supports datetime, array, float (timestamp) and None"""
     if isinstance(dt, datetime) or dt is None:
         return dt
+    elif isinstance(dt, float):
+        return datetime.utcfromtimestamp(dt)
     else:
         return dt_from_array(dt)
 
@@ -54,4 +60,5 @@ def dt_ensure_datetime(dt: datetime | Sequence | None) -> datetime | None:
 def dt_utcnow_array() -> list:
     dt = datetime.utcnow()
     return dt_to_array(dt)
+
 
