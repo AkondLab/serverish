@@ -15,7 +15,7 @@ to do the same preserving None.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Sequence
 
 
@@ -42,7 +42,7 @@ def dt_ensure_array(dt: datetime | Sequence | float | None) -> list | None:
     elif isinstance(dt, datetime):
         return dt_to_array(dt)
     elif isinstance(dt, float):
-        return dt_to_array(datetime.utcfromtimestamp(dt))
+        return dt_to_array(datetime.fromtimestamp(dt, UTC))
     else:
         return list(dt)
 
@@ -52,7 +52,7 @@ def dt_ensure_datetime(dt: datetime | Sequence | float | None) -> datetime | Non
     if isinstance(dt, datetime) or dt is None:
         return dt
     elif isinstance(dt, float):
-        return datetime.utcfromtimestamp(dt)
+        return datetime.fromtimestamp(dt, UTC)
     else:
         return dt_from_array(dt)
 
