@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from serverish.base import dt_to_array, dt_from_array, dt_ensure_array, dt_ensure_datetime, dt_utcnow_array
 
 
@@ -39,3 +39,11 @@ def test_all_timestamps():
     # Old 9-elements format
     arr = [2023, 12, 9, 1, 33, 21, 5, 343, 0]
     assert dt_from_array(arr) == datetime(2023, 12, 9, 1, 33, 21, 5)
+
+def test_dt_ensure_array_with_float():
+    flt = 123456.789
+    assert dt_ensure_array(flt) == [1970, 1, 2, 10, 17, 36, 789000]
+
+def test_dt_ensure_datetime_with_float():
+    flt = 123456.789
+    assert dt_ensure_datetime(flt) == datetime(1970, 1, 2, 10, 17, 36, 789000, tzinfo=timezone.utc)
