@@ -5,7 +5,7 @@ Based on `rich.progress`, in many cases just plugging this class in place of `ri
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from operator import length_hint
 from typing import Iterable, Sequence, TypeVar, Optional
 
@@ -48,7 +48,7 @@ class ProgressTask:
             return None
         if self.stop_time is not None:
             return (self.stop_time - self.start_time).total_seconds()
-        return (datetime.utcnow() - self.start_time).total_seconds()
+        return (datetime.now(timezone.utc) - self.start_time).total_seconds()
 
     @property
     def finished(self) -> bool:
@@ -136,7 +136,7 @@ class MsgProgressPublisher(MsgPublisher):
         """
         task = self.tasks[task_id]
         if task.start_time is None:
-            task.start_time = datetime.utcnow()
+            task.start_time = datetime.now(timezone.utc)
         await self.publish_progress(task_id)
 
     #ok
@@ -149,7 +149,7 @@ class MsgProgressPublisher(MsgPublisher):
             task_id (TaskID): ID of task.
         """
         task = self.tasks[task_id]
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         if task.start_time is None:
             task.start_time = current_time
         task.stop_time = current_time
@@ -190,7 +190,7 @@ class MsgProgressPublisher(MsgPublisher):
             task.description = description
         update_completed = task.completed - completed_start
 
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         # _progress = task._progress
 
         # popleft = _progress.popleft
@@ -227,7 +227,7 @@ class MsgProgressPublisher(MsgPublisher):
             completed (int, optional): Number of steps completed. Defaults to 0.
             description (str, optional): Change task description if not None. Defaults to None.
         """
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         task = self.tasks[task_id]
         task._reset()
         task.start_time = current_time if start else None
