@@ -31,6 +31,47 @@
             "items": {
                 "type": "string"
             }
+        },
+        "nats": {
+            "type": "object",
+            "properties": {
+                "seq": {
+                    "type": "integer",
+                    "description": "SEQential number from NATS JetStream, may be used as opt_start_seq."
+                },
+                "seq-consumer": {
+                    "type": "integer",
+                    "description": "NATS Consumer sequential number."
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Subject as returned by NATS."
+                },
+                "reply": {
+                    "type": "string",
+                    "description": "The subject for replay to the message if applicable."
+                },
+                "stream": {
+                    "type": "string",
+                    "description": "Name of the JestStream stream (if any), message is stored in."
+                },
+                "consumer": {
+                    "type": "string",
+                    "description": "Name of the consumer used (if any)"
+                },
+                "num_delivered": {
+                    "type": "integer",
+                    "description": "Number of times that this message has been delivered. (Higher than one means that there have been redeliveries)"
+                },
+                "num_pending": {
+                    "type": "integer",
+                    "description": "Number of available messages in the Stream that have not been consumed yet."
+                },
+                "timestamp": {
+                    "$ref": "include/timestamp.schema.json",
+                    "description": "NATS delivery timestamp "
+                }
+            }
         }
     },
     "required": ["id", "sender", "ts", "trace_level", "message_type", "tags"]

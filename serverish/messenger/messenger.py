@@ -18,8 +18,9 @@ import functools
 from typing import TYPE_CHECKING
 
 import param
+from nats.aio.msg import Msg
 
-from serverish.base import dt_utcnow_array, dt_from_array, Task, create_task
+from serverish.base import dt_utcnow_array, dt_from_array, Task, create_task, dt_ensure_array
 from serverish.base.collector import Collector
 from serverish.connection.connection_jets import ConnectionJetStream
 from serverish.base.idmanger import gen_id
@@ -207,9 +208,30 @@ class Messenger(Singleton):
         msg['meta'] = self.create_meta(meta)
         return msg
 
+    @classmethod
+    def unpack_nast_msg(cls, natsmsg: Msg) -> tuple[dict, dict]:
+        msg = cls.decode(natsmsg.data)
+        data = msg.get('data', {})
+        meta = msg.get('meta', {})
+        meta['nats'] = {
+            'seq': natsmsg.metadata.sequence.stream,
+            'seq-consumer': natsmsg.metadata.sequence.consumer,
+            'subject': natsmsg.subject,
+            'reply': natsmsg.reply,
+            'stream': natsmsg.metadata.stream,
+            'consumer': natsmsg.metadata.consumer,
+            'num_delivered': natsmsg.metadata.num_delivered,
+            'num_pending': natsmsg.metadata.num_pending,
+            'timestamp': dt_ensure_array(natsmsg.metadata.timestamp)
+        }
+        return data, meta
+
     @staticmethod
     def split_msg(msg: dict) -> tuple[dict, dict | None]:
         """Splits message into data and meta
+
+        Warning:
+            Method is deprecated, use `unpack_nast_msg which` which inserts additional info (like sec) into the meta
 
         Args:
             msg (dict): message
@@ -217,21 +239,22 @@ class Messenger(Singleton):
         Returns:
             tuple[dict, dict]: data, meta
         """
+        log.warning('Messenger.split_msg is deprecated, Use Messenger.unpack_nast_msg instead')
         data = msg.get('data', {})
         meta = msg.get('meta', None)
         return data, meta
 
     @classmethod
-    def msg_to_repr(cls, msg: dict) -> str:
+    def msg_to_repr(cls, data: dict, meta: dict) -> str:
         """Converts message to a string representation
 
         Args:
-            msg (dict): message
+            data (dict): message data
+            meta (dict): message metadata
 
         Returns:
             str: string representation
         """
-        data, meta = cls.split_msg(msg)
         cmeta = meta.copy()
         ts = dt_from_array(cmeta.pop('ts')).strftime("%Y-%m-%dT%H:%M:%S")
         id_ = cmeta.pop('id')
@@ -240,18 +263,18 @@ class Messenger(Singleton):
         return f"{ts} {id_} {smeta} data:{sdata[:100]}"
 
     @classmethod
-    def log_msg_trace(cls, msg: dict, comment: str) -> None:
+    def log_msg_trace(cls, data: dict, meta: dict, comment: str) -> None:
         """Logs a message if trace_level is high enough
 
         Args:
-            msg (dict): message
+            data (dict): message data
+            meta (dict): message metadata
             comment (str): comment to log
         """
-        data, meta = cls.split_msg(msg)
         trace_level = meta.get('trace_level', logging.DEBUG)
         if trace_level < log.getEffectiveLevel():
             return
-        log.log(trace_level, f"{comment} [{cls.msg_to_repr(msg)}]")
+        log.log(trace_level, f"{comment} [{cls.msg_to_repr(data, meta)}]")
 
     def msg_validate(self, msg: dict):
         """Validates message, raises jsonschema.ValidationError if invalid
@@ -262,10 +285,12 @@ class Messenger(Singleton):
         if self.validation:
             self.validator.validate(msg)
 
-    def encode(self, msg: dict) -> bytes:
+    @classmethod
+    def encode(cls, msg: dict) -> bytes:
         return json.dumps(msg).encode('utf-8')
 
-    def decode(self, bdata: bytes) -> dict:
+    @classmethod
+    def decode(cls, bdata: bytes) -> dict:
         return json.loads(bdata.decode('utf-8'))
 
     async def purge(self, subject: str) -> None:
@@ -537,3 +562,8 @@ class MsgDriver(Manageable):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.close()
+
+    def __str__(self):
+        return f'{self.name} [{self.subject}]'
+
+

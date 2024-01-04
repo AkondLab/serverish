@@ -38,6 +38,7 @@ class ConnectionNATS(Connection):
                                nats_init=self.diagnose_initialized,
                                nats_server = self.diagnose_nats_server_port,
                                )
+        self.reconnect_cbs = []
         # self.status['nats'] = Status.new_na(msg='Not initialized')
 
     async def nats_error_cb(self, e: Exception):
@@ -54,11 +55,22 @@ class ConnectionNATS(Connection):
         """Reconnected callback for NATS connection"""
         await self.update_statuses()
         _logger.info(f'NATS reconnected: Status: {self.format_status()}')
+        for cb in self.reconnect_cbs:
+            await cb()
 
     async def nats_closed_cb(self):
         """Closed callback for NATS connection"""
         await self.update_statuses()
         _logger.info(f'NATS closed')
+
+    def add_reconnect_cb(self, cb):
+        self.reconnect_cbs.append(cb)
+
+    def remove_reconnect_cb(self, cb):
+        try:
+            self.reconnect_cbs.remove(cb)
+        except ValueError:
+            pass
 
     async def connect(self, **kwargs):
         """Connects to NATS server

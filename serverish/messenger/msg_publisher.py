@@ -29,7 +29,7 @@ class MsgPublisher(MsgDriver):
         except jsonschema.ValidationError as e:
             log.error(f"Message {msg['meta']['id']} validation error: {e}")
             raise e
-        self.messenger.log_msg_trace(msg, f"PUB to {self.subject}")
+        self.messenger.log_msg_trace(msg['data'], msg['meta'], f"PUB to {self.subject}")
         try:
             await self.connection.js.publish(self.subject, bdata, **kwargs)
         except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError):

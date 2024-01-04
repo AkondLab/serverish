@@ -17,7 +17,13 @@ serverish = {git="https://github.com/AkondLab/serverish.git", extras=["messenger
 or specify dpendency with extras in the `pip` convention: `serverish[messenger]`.
 this will install `nats-py` package.
 
+## Plans
+- Decorators `@messenger.sub(subject)` (Web framework style)
+- Progress with automatic increment for known durations e.g. `pro_pub.update(completed=1, when=+20)`
+- Pytest fixtures for NATS on CI
+
 ## Changes
+* 0.12 Extends messges metdata of `nats` section, Handles reconnection of subscriptions, 
 * 0.11 Extends, tasks, NATS connection tracking and messenger opening options (`Messenger.open`)
 * 0.10 Adds timestamp to journal messages and extablishes schema for journal messages.
 * 0.9.1 Makes dependency to aiodns optional.

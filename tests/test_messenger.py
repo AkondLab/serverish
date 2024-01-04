@@ -40,9 +40,9 @@ async def test_messenger_pub_simple_cm():
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_sub():
 
+    subject = 'test.messenger.messenger_pub_sub'
+
     now = datetime.datetime.now()
-    pub = get_publisher('test.messenger.test_messenger_pub_sub')
-    sub = get_reader('test.messenger.test_messenger_pub_sub', deliver_policy='by_start_time', opt_start_time=now)
 
     async def subsciber_task(sub):
         async for data, meta in sub:
@@ -56,7 +56,10 @@ async def test_messenger_pub_sub():
             await asyncio.sleep(0.1)
         await pub.publish(data={'n': 10, 'final': True})
 
-    async with Messenger().context(host='localhost', port=4222):
+    async with Messenger().context(host='localhost', port=4222) as mes:
+        await mes.purge(subject)
+        pub = get_publisher(subject=subject)
+        sub = get_reader(subject=subject, deliver_policy='by_start_time', opt_start_time=now)
         await asyncio.gather(subsciber_task(sub), publisher_task(pub))
         await pub.close()
         await sub.close()

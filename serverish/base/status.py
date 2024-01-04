@@ -124,5 +124,9 @@ class Status:
     def __str__(self):
         return f'{self.status}'
 
+    def __repr__(self):
+        return f"[{self.status.name}] {self.msg})"
+
+
     def __bool__(self):
         return self.status == StatusEnum.ok

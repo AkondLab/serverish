@@ -64,8 +64,8 @@ class ConnectionJetStream(ConnectionNATS):
         nc: nats.NATS | None = self.nc
         if nc is None:
             return
-        self.js: nats.js.JetStreamContext = nc.jetstream()
-
+        else:
+            self.setup_jetstream()
         # Persist messages on 'foo's subject.
         # await self.js.add_stream(name="sample-stream", subjects=["foo"])
         # await self.js.add_stream(name="sample-stream", subjects=["foo"])
@@ -82,6 +82,16 @@ class ConnectionJetStream(ConnectionNATS):
 
         await self.update_statuses()
 
+    def setup_jetstream(self):
+        if self.nc is not None:
+            self.js: nats.js.JetStreamContext = self.nc.jetstream()
+        logging.info(f"JetStream connected")
+
+    async def nats_reconnected_cb(self):
+        await super().nats_reconnected_cb()
+        self.setup_jetstream()
+        await self.update_statuses()
+        logging.info(f'Jeststream reconnect status: {self.format_status()}')
 
     async def ensure_subject_in_stream(self, stream: str, subject: str,
                                        create_stram_if_needed: bool = False,
