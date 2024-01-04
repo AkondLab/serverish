@@ -56,8 +56,7 @@ class MsgRpcRequester(MsgDriver):
             raise MessengerRequestNoResponders(e)
         except TimeoutError as e:
             raise MessengerRequestTimeout(e)
-        rmsg = self.messenger.decode(resp.data)
-        rdata, rmeta = self.messenger.split_msg(rmsg)
+        rdata, rmeta = self.messenger.unpack_nats_msg(resp)
         if rmeta is None:
             raise MessengerRequestJetStreamSubject(self.subject)
         return rdata, rmeta
@@ -110,8 +109,7 @@ class MsgRpcRequester(MsgDriver):
             except asyncio.CancelledError:
                 raise MessengerRequestCanceled()
 
-        msg = self.messenger.decode(r.data)
-        data, meta = self.messenger.split_msg(msg)
+        data, meta = self.messenger.unpack_nats_msg(r)
         return data, meta
 
     def cancel(self, t:Task) -> None:

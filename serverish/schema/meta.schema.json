@@ -35,6 +35,10 @@
         "nats": {
             "type": "object",
             "properties": {
+                "js": {
+                    "type": "boolean",
+                    "description": "Does a massage originates from JetStream?"
+                },
                 "seq": {
                     "type": "integer",
                     "description": "SEQential number from NATS JetStream, may be used as opt_start_seq."

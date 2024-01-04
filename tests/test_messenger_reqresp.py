@@ -26,24 +26,24 @@ async def test_messenger_rpc_create_responder():
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_messenger_rpc_single_no_js():
+async def test_messenger_rpc_single_no_js_ok():
 
     async with Messenger().context(host='localhost', port=4222) as mess:
-        async with get_rpcresponder('test_no_js.messenger.test_messenger_rpc_create_responder') as r:
+        async with get_rpcresponder('test_no_js.messenger.test_messenger_rpc_single_no_js_ok') as r:
             await r.register_function(cb)
-            data, meta = await request('test_no_js.messenger.test_messenger_rpc_create_responder', data={'a': 1, 'b': 2})
+            data, meta = await request('test_no_js.messenger.test_messenger_rpc_single_no_js_ok', data={'a': 1, 'b': 2})
             assert data['c'] == 3
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_messenger_rpc_single_js():
+async def test_messenger_rpc_single_js_error():
 
     async with Messenger().context(host='localhost', port=4222) as mess:
         try:
-            async with get_rpcresponder('test.messenger.test_messenger_rpc_create_responder') as r:
+            async with get_rpcresponder('test.messenger.test_messenger_rpc_single_js_error') as r:
                 await r.register_function(cb)
-                data, meta = await request('test.messenger.test_messenger_rpc_create_responder', data={'a': 1, 'b': 2})
+                data, meta = await request('test.messenger.test_messenger_rpc_single_js_error', data={'a': 1, 'b': 2})
                 print (data, meta)
         except MessengerRequestJetStreamSubject:
             pass

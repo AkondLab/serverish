@@ -62,6 +62,7 @@ class MsgReader(MsgDriver):
             consumer_cfg = {}
         self.pull_subscription: JetStreamContext.PullSubscription | None = None
         self.push_subscription: JetStreamContext.PushSubscription | None = None
+        self.last_seq: int | None = None
         self._stop: Event = Event()
         self._push: Event = Event()
         self._msg_processed: Event = Event()
@@ -113,7 +114,7 @@ class MsgReader(MsgDriver):
                         log.debug(f"Pulling from {self}")
                         bmsg = (await self.pull_subscription.fetch(batch=1, timeout=0.1))[0]
                         await bmsg.ack()
-                        data, meta = self.messenger.unpack_nast_msg(bmsg)
+                        data, meta = self.messenger.unpack_nats_msg(bmsg)
                         self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
                         meta['receive_mode'] = 'pull'
                     except nats.errors.TimeoutError:
@@ -151,7 +152,7 @@ class MsgReader(MsgDriver):
                             raise _ReconnectNeededError
                         bmsg = await self.push_subscription.next_msg()
                         await bmsg.ack()
-                        data, meta = self.messenger.unpack_nast_msg(bmsg)
+                        data, meta = self.messenger.unpack_nats_msg(bmsg)
                         self.messenger.log_msg_trace(data, meta, f"SUB PUSH iteration from {self.subject}")
                         meta['receive_mode'] = 'push'
                         if f'{meta["id"]}{meta["ts"]}' in self.id_cache:

@@ -8,7 +8,6 @@ from typing import Callable
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
 
-from serverish.base import Task
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
 
@@ -71,7 +70,7 @@ class MsgRpcResponder(MsgDriver):
         self.subscription: Subscription | None = None
         super().__init__(**kwargs)
 
-    async def register_function(self, callback: Callable[[Rpc], None] | Callable[[Rpc], asyncio.Future]) -> Task:
+    async def register_function(self, callback: Callable[[Rpc], None] | Callable[[Rpc], asyncio.Future]):
         """Sets a callback function for each message
 
         Args:
@@ -92,10 +91,7 @@ class MsgRpcResponder(MsgDriver):
 
         async def _cb(nats_msg:Msg):
 
-            bmsg = nats_msg.data
-            msg = self.messenger.decode(bmsg)
-            log.debug(f"Received Request message {msg}")
-            data, meta = self.messenger.split_msg(msg)
+            data, meta = self.messenger.unpack_nats_msg(nats_msg)
             rpc = Rpc(nats_msg=nats_msg, data=data, meta=meta)
             ret = None
             try:

@@ -18,6 +18,7 @@ import functools
 from typing import TYPE_CHECKING
 
 import param
+import nats
 from nats.aio.msg import Msg
 
 from serverish.base import dt_utcnow_array, dt_from_array, Task, create_task, dt_ensure_array
@@ -209,21 +210,29 @@ class Messenger(Singleton):
         return msg
 
     @classmethod
-    def unpack_nast_msg(cls, natsmsg: Msg) -> tuple[dict, dict]:
+    def unpack_nats_msg(cls, natsmsg: Msg) -> tuple[dict, dict]:
         msg = cls.decode(natsmsg.data)
         data = msg.get('data', {})
         meta = msg.get('meta', {})
-        meta['nats'] = {
-            'seq': natsmsg.metadata.sequence.stream,
-            'seq-consumer': natsmsg.metadata.sequence.consumer,
+        try:
+            meta['nats'] = {
+                'js': True,
+                'seq': natsmsg.metadata.sequence.stream,
+                'seq-consumer': natsmsg.metadata.sequence.consumer,
+                'stream': natsmsg.metadata.stream,
+                'consumer': natsmsg.metadata.consumer,
+                'num_delivered': natsmsg.metadata.num_delivered,
+                'num_pending': natsmsg.metadata.num_pending,
+                'timestamp': dt_ensure_array(natsmsg.metadata.timestamp)
+            }
+        except nats.errors.NotJSMessageError:
+            meta['nats'] = {
+                'js': False
+            }
+        meta['nats'].update({
             'subject': natsmsg.subject,
             'reply': natsmsg.reply,
-            'stream': natsmsg.metadata.stream,
-            'consumer': natsmsg.metadata.consumer,
-            'num_delivered': natsmsg.metadata.num_delivered,
-            'num_pending': natsmsg.metadata.num_pending,
-            'timestamp': dt_ensure_array(natsmsg.metadata.timestamp)
-        }
+        })
         return data, meta
 
     @staticmethod
