@@ -4,7 +4,7 @@ from serverish.base import dt_to_array, dt_from_array, dt_ensure_array, dt_ensur
 
 
 def test_dt_to_array():
-    dt = datetime(2023, 9, 12, 10, 5, 30, 123456)
+    dt = datetime(2023, 9, 12, 10, 5, 30, 123456, tzinfo=timezone.utc)
     assert dt_to_array(dt) == [2023, 9, 12, 10, 5, 30, 123456]
 
 def test_dt_from_array():
@@ -12,7 +12,7 @@ def test_dt_from_array():
     assert dt_from_array(arr) == datetime(2023, 9, 12, 10, 5, 30, 123456)
 
 def test_dt_ensure_array_with_datetime():
-    dt = datetime(2023, 9, 12, 10, 5, 30, 123456)
+    dt = datetime(2023, 9, 12, 10, 5, 30, 123456, tzinfo=timezone.utc)
     assert dt_ensure_array(dt) == [2023, 9, 12, 10, 5, 30, 123456]
 
 def test_dt_ensure_array_with_array():
