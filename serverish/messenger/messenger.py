@@ -118,7 +118,7 @@ class Messenger(Singleton):
                 raise MessengerCannotConnect(f"Could not connect to NATS {host}:{port}, gave up after {timeout} seconds")
             else:
                 self.opener_task = None
-        return task
+        return self.opener_task
 
 
     async def _open(self, con, timeout):
@@ -500,25 +500,6 @@ class Messenger(Singleton):
         return MsgJournalReader(subject=subject,
                                     parent=Messenger(),
                                     deliver_policy=deliver_policy,
-                                    **kwargs)
-
-    def foo(self):
-          """Returns a progress reader for a given subject
-
-          Args:
-                subject: subject to read from
-                deliver_policy: deliver policy, in this context 'last' is most useful for progress tracking
-                stop_when_done: whether to stop iteration when all tasks are done
-
-          Returns:
-                MsgProgressReader: a progress reader for the given subject
-          """
-
-          from serverish.messenger.msg_progress_read import MsgProgressReader
-          return MsgProgressReader(subject=subject,
-                                    parent=Messenger(),
-                                    deliver_policy=deliver_policy,
-                                    stop_when_done=stop_when_done,
                                     **kwargs)
 
 
