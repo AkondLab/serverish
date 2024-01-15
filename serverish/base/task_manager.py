@@ -32,7 +32,11 @@ class Task(HasStatuses):
         # self.set_check_methods(ping=self.diagnose_ping, dns=self.diagnose_dns)
 
     async def start(self):
-        """Runs the task"""
+        """Runs the task. Async - preferred - way"""
+        self.start_sync()
+
+    def start_sync(self):
+        """Runs the task. Sync method"""
         def done_cb(task):
             logger.debug(f'Task {self.name} done')
             self.set_status('running', Status.new_na(msg='Task finished'))
@@ -88,9 +92,14 @@ class Task(HasStatuses):
 
 
 async def create_task(coro, name: str, class_=Task) -> Task:
-    """Creates task, like asyncio.create_task, but tracked"""
+    """Creates task, like asyncio.create_task, but tracked. Async - preferred - way"""
     tm = TaskManager()
     return await tm.create_task(coro, name=name, class_=class_)
+
+async def create_task_sync(coro, name: str, class_=Task) -> Task:
+    """Creates task, like asyncio.create_task, but tracked"""
+    tm = TaskManager()
+    return tm.create_task_sync(coro, name=name, class_=class_)
 
 
 class TaskManager(Singleton):
@@ -99,9 +108,15 @@ class TaskManager(Singleton):
     Done tasks removes themselves from manager"""
 
     async def create_task(self, coro, name: str, class_=Task) -> Task:
-        """Creates task, like asyncio.create_task, but tracked"""
+        """Creates task, like asyncio.create_task, but tracked. Async - preferred - way"""
         task = class_(coro=coro, name=name, parent=self, i_know_what_i_am_doing=True)
         await task.start()
+        return task
+
+    def create_task_sync(self, coro, name: str, class_=Task) -> Task:
+        """Creates task, like asyncio.create_task, but tracked"""
+        task = class_(coro=coro, name=name, parent=self, i_know_what_i_am_doing=True)
+        task.start_sync()
         return task
 
     async def cancel_all(self, timeout: float = 10):
