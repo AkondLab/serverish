@@ -108,10 +108,19 @@ class Messenger(Singleton):
         self.conn = ConnectionJetStream(host, port)
         await self.conn.update_statuses()
 
+        self.opener_task = await create_task(self.conn.connect(), f"Messenger NATS connection opener {host}:{port}")
         task = await create_task(self._open(self.conn, timeout), f"Messenger wait for open {host}:{port}")
-        try:
-            await task.wait_for(wait, cancel_on_timeout=False)
-        except asyncio.TimeoutError:
+        if isinstance(wait, bool):
+            do_wait = wait
+            wait = None
+        else:
+            do_wait = True
+        if do_wait:
+            try:
+                await task.wait_for(wait, cancel_on_timeout=False)
+            except asyncio.TimeoutError as e:
+                log.info(f"Not connected in {wait}s. Backgrounding connection to NATS {host}:{port}")
+        else:
             log.info(f"Backgrounding connection to NATS {host}:{port}")
         if self.opener_task.done():
             if self.opener_task.cancelled():
@@ -122,7 +131,6 @@ class Messenger(Singleton):
 
 
     async def _open(self, con, timeout):
-        self.opener_task = await create_task(con.connect(), f"Messenger NATS connection opener {con.host}:{con.port}")
         try:
             await self.opener_task.wait_for(timeout)
         except asyncio.TimeoutError:

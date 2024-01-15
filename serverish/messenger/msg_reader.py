@@ -112,7 +112,7 @@ class MsgReader(MsgDriver):
                 while True:
                     try:
                         log.debug(f"Pulling from {self}")
-                        bmsg = (await self.pull_subscription.fetch(batch=1, timeout=0.1))[0]
+                        bmsg = (await self.pull_subscription.fetch(batch=1, timeout=10.0))[0]
                         await bmsg.ack()
                         data, meta = self.messenger.unpack_nats_msg(bmsg)
                         self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
