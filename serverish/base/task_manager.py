@@ -96,7 +96,7 @@ async def create_task(coro, name: str, class_=Task) -> Task:
     tm = TaskManager()
     return await tm.create_task(coro, name=name, class_=class_)
 
-async def create_task_sync(coro, name: str, class_=Task) -> Task:
+def create_task_sync(coro, name: str, class_=Task) -> Task:
     """Creates task, like asyncio.create_task, but tracked"""
     tm = TaskManager()
     return tm.create_task_sync(coro, name=name, class_=class_)
