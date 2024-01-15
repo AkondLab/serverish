@@ -9,7 +9,7 @@ def test_dt_to_array():
 
 def test_dt_from_array():
     arr = [2023, 9, 12, 10, 5, 30, 123456]
-    assert dt_from_array(arr) == datetime(2023, 9, 12, 10, 5, 30, 123456)
+    assert dt_from_array(arr) == datetime(2023, 9, 12, 10, 5, 30, 123456, tzinfo=timezone.utc)
 
 def test_dt_ensure_array_with_datetime():
     dt = datetime(2023, 9, 12, 10, 5, 30, 123456, tzinfo=timezone.utc)
@@ -25,7 +25,7 @@ def test_dt_ensure_datetime_with_datetime():
 
 def test_dt_ensure_datetime_with_array():
     arr = [2023, 9, 12, 10, 5, 30, 123456]
-    assert dt_ensure_datetime(arr) == datetime(2023, 9, 12, 10, 5, 30, 123456)
+    assert dt_ensure_datetime(arr) == datetime(2023, 9, 12, 10, 5, 30, 123456, tzinfo=timezone.utc)
 
 def test_now_array():
     before = datetime.utcnow()
