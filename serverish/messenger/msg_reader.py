@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import asyncio
 from asyncio import Event
+from collections import deque
 from datetime import datetime
 
 import nats.errors
@@ -64,9 +65,10 @@ class MsgReader(MsgDriver):
         self.push_subscription: JetStreamContext.PushSubscription | None = None
         self.last_seq: int | None = None
         self._stop: Event = Event()
-        self._push: Event = Event()
+        self._emptied: Event = Event()
         self._msg_processed: Event = Event()
         self._reconnect_needed: Event = Event()
+        self.pull_batch = deque()
         self.id_cache = FifoSet(128)
         super().__init__(subject=subject, parent=parent,
                          deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg,
@@ -86,7 +88,42 @@ class MsgReader(MsgDriver):
         finally:
             pass
 
+
     async def read_next(self) -> tuple[dict, dict]:
+        if not self.is_open:
+            await self.open()
+
+
+        n = 0
+        while len(self.pull_batch) == 0:
+            if self._stop.is_set():
+                await self.close()
+                raise MessengerReaderStopped
+            if n > 2:
+                self._emptied.set()
+
+            try:
+                timeout = min(0.2 + n/5, 5)  # start fast and slow down to 5s
+                batch = 1 if n > 1 else 100
+                log.debug(f"Pulling {batch} in {timeout}s from {self}")
+                self.pull_batch = deque(await self.pull_subscription.fetch(batch=batch, timeout=timeout))
+                log.debug(f"Pulled {len(self.pull_batch)} messages from {self}")
+            except nats.errors.TimeoutError:
+                pass
+            n += 1
+
+        self._emptied.clear()
+        bmsg = self.pull_batch.popleft()
+        await bmsg.ack()
+        data, meta = self.messenger.unpack_nats_msg(bmsg)
+        self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
+        meta['receive_mode'] = 'pull'
+        logging.debug(f'Returning message {data}')
+
+        return data, meta
+
+
+    async def read_next_(self) -> tuple[dict, dict]:
         if not self.is_open:
             await self.open()
 
@@ -108,11 +145,18 @@ class MsgReader(MsgDriver):
             bmsg = None
             data, meta = {}, {}
             # First - pull subscription
-            if not self._push.is_set():
+            if not self._emptied.is_set():
+                # self.pull_batch = deque()
                 while True:
+                    if self._stop.is_set():
+                        await self.close()
+                        raise MessengerReaderStopped
                     try:
-                        log.debug(f"Pulling from {self}")
-                        bmsg = (await self.pull_subscription.fetch(batch=1, timeout=10.0))[0]
+                        if len(self.pull_batch) == 0:
+                            log.debug(f"Pulling from {self}")
+                            self.pull_batch = deque(await self.pull_subscription.fetch(batch=100, timeout=10.0))
+                            log.debug(f"Pulled {len(self.pull_batch)} messages from {self}")
+                        bmsg = self.pull_batch.popleft()
                         await bmsg.ack()
                         data, meta = self.messenger.unpack_nats_msg(bmsg)
                         self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
@@ -124,7 +168,7 @@ class MsgReader(MsgDriver):
                             continue
                         else:
                             # push is ready and pull timeouts, we can switch to push
-                            self._push.set()
+                            self._emptied.set()
                     except nats.errors.ConnectionClosedError:
                         if self.on_connection_close == 'RAISE':
                             log.warning(f'Connection closed, raising exception on {self}')
@@ -140,7 +184,7 @@ class MsgReader(MsgDriver):
                     break
 
             # Second - push subscription
-            if bmsg is None and self._push.is_set():
+            if bmsg is None and self._emptied.is_set():
                 log.debug(f"Waiting for pushed to {self}")
                 while True:
                     if self._stop.is_set():
@@ -216,7 +260,7 @@ class MsgReader(MsgDriver):
             log.debug(f"Creating push subscription for {self}")
             self.push_subscription = await js.subscribe(self.subject,
                                                         config=consumer_conf)
-            self._push.set()
+            self._emptied.set()
         await super().open()
 
     async def _create_pull_subscribtion(self, consumer_conf: ConsumerConfig):
@@ -233,7 +277,7 @@ class MsgReader(MsgDriver):
         except (nats.errors.ConnectionClosedError, AttributeError):  # no connection, no reason to break
             pass
         self.push_subscription = None
-        self._push.clear()
+        self._emptied.clear()
         consumer_conf = await self._create_consumer_cfg()
         # set policy for 'new messages' for push subscription
         if self.last_seq is not None:
@@ -301,6 +345,8 @@ class MsgReader(MsgDriver):
                 ci = await self.pull_subscription.consumer_info()
                 await self.pull_subscription.unsubscribe()
                 await self.connection.js.delete_consumer(stream=ci.stream_name, consumer=ci.name)
+            except nats.js.errors.NotFoundError:
+                pass  # no consumer is ok
             except Exception as e:
                 log.warning(f'Exception while closing PULL subscription: {e}')
             self.pull_subscription = None
@@ -324,7 +370,7 @@ class MsgReader(MsgDriver):
             raise RuntimeError("Subscription not open")
 
         # wait for pull subscription to finish ot stop
-        tw = asyncio.create_task(self._push.wait())
+        tw = asyncio.create_task(self._emptied.wait())
         ts = asyncio.create_task(self._stop.wait())
         await asyncio.wait([tw, ts],
                            timeout=timeout,
@@ -334,9 +380,9 @@ class MsgReader(MsgDriver):
         ts.cancel()
         if self._stop.is_set():
             return
-        elif self._push.is_set():
+        elif self._emptied.is_set():
             self._msg_processed.clear()
-            while self.push_subscription.pending_msgs > 0:
+            while self.push_subscription is not None and self.push_subscription.pending_msgs > 0:
                 to = timeout - (datetime.now() - now).total_seconds() if timeout is not None else None
                 await wait_for_psce(self._msg_processed.wait(), timeout=to)
                 self._msg_processed.clear()
@@ -356,7 +402,7 @@ class MsgReader(MsgDriver):
             raise RuntimeError("Subscription not open")
 
         # wait for pull subscription to finish ot stop
-        tw = asyncio.create_task(self._push.wait())
+        tw = asyncio.create_task(self._emptied.wait())
         ts = asyncio.create_task(self._stop.wait())
         await asyncio.wait([tw, ts],
                            timeout=timeout,
@@ -366,7 +412,7 @@ class MsgReader(MsgDriver):
         ts.cancel()
         if self._stop.is_set():
             return
-        elif self._push.is_set():
+        elif self._emptied.is_set():
             await self.push_subscription.drain()
         self.stop()
 
@@ -386,7 +432,7 @@ class MsgReader(MsgDriver):
         self.reconnect()
 
     def is_pull(self):
-        return not self._push.is_set()
+        return not self._emptied.is_set()
 
     def __str__(self):
         return f"[{'PULL' if self.is_pull() else 'PUSH'}]{super().__str__()}"

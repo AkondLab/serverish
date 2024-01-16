@@ -23,6 +23,7 @@ this will install `nats-py` package.
 - Pytest fixtures for NATS on CI
 
 ## Changes
+* 1.0  Changes NATS subscriptions to pull only
 * 0.12 Extends messges metdata of `nats` section, Handles reconnection of subscriptions, 
 * 0.11 Extends, tasks, NATS connection tracking and messenger opening options (`Messenger.open`)
 * 0.10 Adds timestamp to journal messages and extablishes schema for journal messages.

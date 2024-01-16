@@ -43,7 +43,7 @@ async def test_messenger_pub_sub_cb():
             assert len(msgs) == 4
             await asyncio.sleep(1)
             await publisher_task(pub, 5)
-            await asyncio.sleep(1)
+            await asyncio.sleep(6)
             await sub.wait_for_empty()
             assert len(msgs) == 9
 
