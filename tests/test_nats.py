@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import pytest
 import socket
@@ -26,12 +27,18 @@ async def ensure_stram_for_tests(stream, subject):
         await c.ensure_subject_in_stream(stream, subject, create_stram_if_needed=True)
 
 
+@pytest.mark.asyncio  # This tells pytest this test is async
+async def test_nats_fixture(nats_host, nats_port):
+    assert nats_host is not None
+    assert nats_port == 4222
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 # @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 # @pytest.mark.skipif(ci, reason="Not working on CI")
 async def test_nats(nats_host, nats_port):
+    logging.info(f"Connecting to {nats_host}:{nats_port}")
     c = ConnectionNATS(host=nats_host, port=nats_port)
+    logging.info(f"Connection gained")
     async with c:
         codes = await c.diagnose(no_deduce=True)
         for s in codes.values():
