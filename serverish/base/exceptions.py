@@ -1,6 +1,9 @@
 class MessengerCannotConnect(Exception):
     pass
 
+class MessengerNotConnected(Exception):
+    pass
+
 class MessengerReaderStopped(Exception):
     pass
 

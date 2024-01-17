@@ -4,6 +4,7 @@ import jsonschema
 import nats.errors
 import nats.js
 
+from serverish.base import MessengerNotConnected
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver, log
 
@@ -32,6 +33,9 @@ class MsgPublisher(MsgDriver):
         self.messenger.log_msg_trace(msg['data'], msg['meta'], f"PUB to {self.subject}")
         try:
             await self.connection.js.publish(self.subject, bdata, **kwargs)
+        except AttributeError: # no js - not connected
+            log.error(f"Trying to publish to subject '{self.subject}' failed. JestStream not connected")
+            raise MessengerNotConnected(f"Trying to publish to subject '{self.subject}' failed. JestStream not connected")
         except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError):
             # it's OK for non-jetstream, we just don't have subscribers yet
             log.debug(
