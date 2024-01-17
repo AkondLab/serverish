@@ -8,9 +8,10 @@ jobs:
 
     services:
       nats:
-        image: nats-streaming:latest
+        image: nats:latest
         ports:
           - 4222:4222
+        options: "-js"
 
     steps:
     - name: Check out code

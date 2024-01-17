@@ -46,6 +46,8 @@ async def test_nats_server(nats_host, nats_port):
 # @pytest.mark.skipif(ci, reason="Not working on CI")
 async def test_nats(nats_host, nats_port):
     logging.info(f"Connecting to {nats_host}:{nats_port}")
+    if nats_host is None:
+        pytest.skip("Skip: no nats host found")
     c = ConnectionNATS(host=nats_host, port=nats_port)
     logging.info(f"Connection gained")
     async with c:
