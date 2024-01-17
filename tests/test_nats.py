@@ -33,6 +33,7 @@ async def test_nats_fixture(nats_host, nats_port):
     assert nats_port == 4222
 
 @pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.timeout(20)
 # @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 # @pytest.mark.skipif(ci, reason="Not working on CI")
 async def test_nats(nats_host, nats_port):
