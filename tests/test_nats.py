@@ -26,6 +26,15 @@ async def ensure_stram_for_tests(stream, subject):
     async with c:
         await c.ensure_subject_in_stream(stream, subject, create_stram_if_needed=True)
 
+@pytest.mark.asyncio  # This tells pytest this test is async
+async def test_nats_on_localhost():
+    c = ConnectionNATS(host='localhost', port=4222)
+    try:
+        await c.connect()
+        assert c.nc.is_connected()
+    finally:
+        await c.close()
+
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async
