@@ -31,9 +31,9 @@ async def test_nats_on_localhost():
     c = ConnectionNATS(host='localhost', port=4222)
     try:
         await c.connect()
-        assert c.nc.is_connected()
+        assert c.nc.is_connected
     finally:
-        await c.close()
+        await c.disconnect()
 
 
 
