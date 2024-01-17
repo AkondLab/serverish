@@ -21,7 +21,7 @@ def is_port_open(host, port):
     try:
         s.connect((host, port))
         return True
-    except ConnectionRefusedError:
+    except (ConnectionRefusedError, OSError):
         return False
     finally:
         s.close()
