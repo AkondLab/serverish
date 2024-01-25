@@ -54,7 +54,7 @@ async def test_messenger_pub3_then_sub():
     async def publisher_task(pub, n):
         for i in range(n):
             await pub.publish(data={'n': i, 'final': False})
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.01)
 
     async def publish_final(pub):
         await pub.publish(data={'n': 9999, 'final': True})
@@ -69,7 +69,7 @@ async def test_messenger_pub3_then_sub():
         t = await create_task(subsciber_task(sub), "sub")
 
         logging.info('subscriber started')
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.03)
         logging.info('2nd publisher starting')
         await publisher_task(pub, 2)
 
