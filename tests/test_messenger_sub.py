@@ -16,15 +16,15 @@ from tests.test_nats import is_nats_running, ensure_stram_for_tests
 @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_sub_cb():
 
+    subject = 'test.messenger.test_messenger_pub_sub_cb'
+
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S.%f')
     now = datetime.datetime.now()
 
-    pub = get_publisher('test.messenger.test_messenger_pub_sub_cb')
-    sub = get_callbacksubscriber('test.messenger.test_messenger_pub_sub_cb', deliver_policy='all')
 
     msgs = []
     def cb(data, meta):
-        print(data, sub)
+        print(data)
         msgs.append(data)
         return True
 
@@ -34,10 +34,12 @@ async def test_messenger_pub_sub_cb():
             await asyncio.sleep(0.1)
 
     async with Messenger().context(host='localhost', port=4222) as mess:
+        pub = get_publisher(subject=subject)
+        await mess.purge(subject=subject)
+        await publisher_task(pub, 4)
+        await asyncio.sleep(0.1)
+        sub = get_callbacksubscriber(subject=subject, deliver_policy='all')
         async with sub:
-            await mess.purge('test.messenger.test_messenger_pub_sub_cb')
-            await publisher_task(pub, 4)
-            await asyncio.sleep(0.1)
             await sub.subscribe(cb)
             await sub.wait_for_empty()
             assert len(msgs) == 4

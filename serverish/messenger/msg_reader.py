@@ -252,15 +252,18 @@ class MsgReader(MsgDriver):
 
         consumer_conf = await self._create_consumer_cfg()
 
-        # check weather to create pull consumer first
-        if consumer_conf.deliver_policy != DeliverPolicy.NEW:
-            log.debug(f"Creating pull subscription for {self}")
-            self.pull_subscription = await self._create_pull_subscribtion(consumer_conf)
-        else:
-            log.debug(f"Creating push subscription for {self}")
-            self.push_subscription = await js.subscribe(self.subject,
-                                                        config=consumer_conf)
-            self._emptied.set()
+        log.debug(f"Creating pull subscription for {self}")
+        self.pull_subscription = await self._create_pull_subscribtion(consumer_conf)
+
+        # if consumer_conf.deliver_policy != DeliverPolicy.NEW:
+        #     log.debug(f"Creating pull subscription for {self}")
+        #     self.pull_subscription = await self._create_pull_subscribtion(consumer_conf)
+        # else:
+        #     log.debug(f"Creating push subscription for {self}")
+        #     self.push_subscription = await js.subscribe(self.subject,
+        #                                                 config=consumer_conf)
+
+        # self._emptied.set()
         await super().open()
 
     async def _create_pull_subscribtion(self, consumer_conf: ConsumerConfig):
