@@ -3,6 +3,8 @@ import os
 import pytest
 import socket
 
+from serverish.connection import ConnectionNATS
+
 
 def find_nats_host(port = 4222):
     candidates = [
@@ -12,19 +14,20 @@ def find_nats_host(port = 4222):
         '127.0.0.1',
     ]
     for host in candidates:
-        if is_port_open(host, port):
+        if is_nats_here(host, port):
             return host
         return None
 
-def is_port_open(host, port):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+async def is_nats_here(host, port):
+    c = ConnectionNATS(host=host, port=port)
     try:
-        s.connect((host, port))
-        return True
-    except (ConnectionRefusedError, OSError):
+        await c.connect()
+        ret = c.nc.is_connected
+        await c.disconnect()
+        return ret
+    except Exception:
         return False
-    finally:
-        s.close()
 
 
 @pytest.fixture(scope="session")
