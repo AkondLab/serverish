@@ -1,5 +1,5 @@
 # serverish - helpers for server alike projects
-[![CI](https://github.com/AkondLab/serverish/actions/workflows/ci.yml/badge.svg)](https://github.com/AkondLab/serverish/actions/workflows/ci.yml)
+[![CI](https://github.com/AkondLab/serverish/actions/workflows/test-ci.yml/badge.svg)](https://github.com/AkondLab/serverish/actions/workflows/test-ci.yml)
 
 ## Features
 * Component management
