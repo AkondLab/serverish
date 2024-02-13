@@ -60,17 +60,20 @@ class MsgCallbackSubscriber(MsgReader):
         assert not (scb is not None and acb is not None)
         cb = scb or acb
         cont = True
+        log.debug(f"Entering sync interation{self}")
         async for data, meta in self:
             try:
                 if scb is not None:
+                    log.debug(f"Calling sync callback {cb} for message {meta}{str(data):20}")
                     cont = scb(data, meta)
                 else:
+                    log.debug(f"Calling async callback {cb} for message {meta}{str(data):20}")
                     cont = await acb(data, meta)
             except CancelledError:
                 log.debug(f'Cancelled {self}')
                 break
             except Exception as e:
-                log.exception(f'Error in callback {cb} for message {meta}{data:20}: {e}')
+                log.exception(f'Error in callback {cb} for message {meta}{str(data):20}: {e}')
             if not cont or self._stop_event.is_set() :
                 break
         log.debug(f"Exiting sync interation{self}")
