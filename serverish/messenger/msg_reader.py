@@ -100,7 +100,14 @@ class MsgReader(MsgDriver):
                 await self.close()
                 raise MessengerReaderStopped
             if n > 2:
-                self._emptied.set()
+                # check consumer, maybe ephemeral consumer is gone
+                # if is OK, signal that we were empty (n > 2 means that we tried to pull messages for a while
+                try:
+                    ci = await self.pull_subscription.consumer_info()
+                    self._emptied.set()
+                except nats.js.errors.NotFoundError:
+                    log.warning(f"Consumer has gone, trying to recreate it on {self}")
+                    await self._reopen()
 
             try:
                 timeout = min(0.2 + n/5, 5)  # start fast and slow down to 5s
@@ -118,127 +125,129 @@ class MsgReader(MsgDriver):
         data, meta = self.messenger.unpack_nats_msg(bmsg)
         self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
         meta['receive_mode'] = 'pull'
-        logging.debug(f'Returning message {data}')
-
-        return data, meta
-
-
-    async def read_next_(self) -> tuple[dict, dict]:
-        if not self.is_open:
-            await self.open()
-
-
-        keep_pulling = True
-        transform_to_pull = False
-        while keep_pulling:
-            if transform_to_pull:
-                try:
-                    await self._transform_to_pull_sub()
-                    keep_pulling = False
-                    transform_to_pull = False
-                except (nats.errors.ConnectionClosedError, nats.errors.TimeoutError):
-                    await asyncio.sleep(1)
-                    continue
-            else:
-                keep_pulling = False
-
-            bmsg = None
-            data, meta = {}, {}
-            # First - pull subscription
-            if not self._emptied.is_set():
-                # self.pull_batch = deque()
-                while True:
-                    if self._stop.is_set():
-                        await self.close()
-                        raise MessengerReaderStopped
-                    try:
-                        if len(self.pull_batch) == 0:
-                            log.debug(f"Pulling from {self}")
-                            self.pull_batch = deque(await self.pull_subscription.fetch(batch=100, timeout=10.0))
-                            log.debug(f"Pulled {len(self.pull_batch)} messages from {self}")
-                        bmsg = self.pull_batch.popleft()
-                        await bmsg.ack()
-                        data, meta = self.messenger.unpack_nats_msg(bmsg)
-                        self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
-                        meta['receive_mode'] = 'pull'
-                    except nats.errors.TimeoutError:
-                        if self.push_subscription is None:
-                            await self._transform_to_push_sub()
-                            # we are creating push subscription but still pulling messages if possible to do not miss any message
-                            continue
-                        else:
-                            # push is ready and pull timeouts, we can switch to push
-                            self._emptied.set()
-                    except nats.errors.ConnectionClosedError:
-                        if self.on_connection_close == 'RAISE':
-                            log.warning(f'Connection closed, raising exception on {self}')
-                            raise
-                        elif self.on_connection_close == 'FINISH':
-                            log.warning(f'Connection closed, finishing iteration on {self}')
-                            self._stop.set()
-                        else:
-                            assert self.on_connection_close == 'WAIT'
-                            log.warning(f'Connection closed, waiting for reconnect on {self}')
-                            await asyncio.sleep(1.0)
-                            continue
-                    break
-
-            # Second - push subscription
-            if bmsg is None and self._emptied.is_set():
-                log.debug(f"Waiting for pushed to {self}")
-                while True:
-                    if self._stop.is_set():
-                        await self.close()
-                        raise MessengerReaderStopped
-                    try:
-                        if self._reconnect_needed.is_set():
-                            self._reconnect_needed.clear()
-                            raise _ReconnectNeededError
-                        bmsg = await self.push_subscription.next_msg()
-                        await bmsg.ack()
-                        data, meta = self.messenger.unpack_nats_msg(bmsg)
-                        self.messenger.log_msg_trace(data, meta, f"SUB PUSH iteration from {self.subject}")
-                        meta['receive_mode'] = 'push'
-                        if f'{meta["id"]}{meta["ts"]}' in self.id_cache:
-                            log.debug(f"Skipping duplicated message from {self.subject}")
-                            bmsg = data = meta = None
-                            continue
-                        break
-                    except nats.errors.TimeoutError:
-                        pass  # keep iterating
-                    except (nats.errors.ConnectionClosedError, _ReconnectNeededError):
-                        if self.on_connection_close == 'RAISE':
-                            log.warning(f'Connection closed, raising exception on {self}')
-                            raise
-                        elif self.on_connection_close == 'FINISH':
-                            log.warning(f'Connection closed, finishing iteration on {self}')
-                            self._stop.set()
-                        else:
-                            assert self.on_connection_close == 'WAIT'
-                            log.warning(f'Connection closed, waiting for reconnect on {self}')
-                            await asyncio.sleep(1.0)
-                            transform_to_pull = True
-                            keep_pulling = True
-                            break
-
-                    except Exception as e:
-                        log.error(f"During interation on {self}, push subscription.next_msg raised {e}")
-                        await self.close()
-                        raise e
-
-        if bmsg is None:
-            log.debug(f"No message to return, closing {self}")
-            await self.close()
-            raise MessengerReaderStopped
-        cachedid = f'{meta["id"]}{meta["ts"]}'
-        try:
-            self.id_cache.add(cachedid)
-        except Exception as e:
-            log.error(f"Error adding id: {cachedid} of msg: data={data} meta={meta} to id_cache: {e}")
-        log.debug(f"Returning message {self}")
         self.last_seq = meta['nats']['seq']
-        self._msg_processed.set()
+
+        logging.debug(f'Returning message seq={self.last_seq}: {data}')
+
         return data, meta
+
+
+    # async def read_next_(self) -> tuple[dict, dict]:
+    #     if not self.is_open:
+    #         await self.open()
+    #
+    #
+    #     keep_pulling = True
+    #     transform_to_pull = False
+    #     while keep_pulling:
+    #         if transform_to_pull:
+    #             try:
+    #                 await self._transform_to_pull_sub()
+    #                 keep_pulling = False
+    #                 transform_to_pull = False
+    #             except (nats.errors.ConnectionClosedError, nats.errors.TimeoutError):
+    #                 await asyncio.sleep(1)
+    #                 continue
+    #         else:
+    #             keep_pulling = False
+    #
+    #         bmsg = None
+    #         data, meta = {}, {}
+    #         # First - pull subscription
+    #         if not self._emptied.is_set():
+    #             # self.pull_batch = deque()
+    #             while True:
+    #                 if self._stop.is_set():
+    #                     await self.close()
+    #                     raise MessengerReaderStopped
+    #                 try:
+    #                     if len(self.pull_batch) == 0:
+    #                         log.debug(f"Pulling from {self}")
+    #                         self.pull_batch = deque(await self.pull_subscription.fetch(batch=100, timeout=10.0))
+    #                         log.debug(f"Pulled {len(self.pull_batch)} messages from {self}")
+    #                     bmsg = self.pull_batch.popleft()
+    #                     await bmsg.ack()
+    #                     data, meta = self.messenger.unpack_nats_msg(bmsg)
+    #                     self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
+    #                     meta['receive_mode'] = 'pull'
+    #                 except nats.errors.TimeoutError:
+    #                     if self.push_subscription is None:
+    #                         await self._transform_to_push_sub()
+    #                         # we are creating push subscription but still pulling messages if possible to do not miss any message
+    #                         continue
+    #                     else:
+    #                         # push is ready and pull timeouts, we can switch to push
+    #                         self._emptied.set()
+    #                 except nats.errors.ConnectionClosedError:
+    #                     if self.on_connection_close == 'RAISE':
+    #                         log.warning(f'Connection closed, raising exception on {self}')
+    #                         raise
+    #                     elif self.on_connection_close == 'FINISH':
+    #                         log.warning(f'Connection closed, finishing iteration on {self}')
+    #                         self._stop.set()
+    #                     else:
+    #                         assert self.on_connection_close == 'WAIT'
+    #                         log.warning(f'Connection closed, waiting for reconnect on {self}')
+    #                         await asyncio.sleep(1.0)
+    #                         continue
+    #                 break
+    #
+    #         # Second - push subscription
+    #         if bmsg is None and self._emptied.is_set():
+    #             log.debug(f"Waiting for pushed to {self}")
+    #             while True:
+    #                 if self._stop.is_set():
+    #                     await self.close()
+    #                     raise MessengerReaderStopped
+    #                 try:
+    #                     if self._reconnect_needed.is_set():
+    #                         self._reconnect_needed.clear()
+    #                         raise _ReconnectNeededError
+    #                     bmsg = await self.push_subscription.next_msg()
+    #                     await bmsg.ack()
+    #                     data, meta = self.messenger.unpack_nats_msg(bmsg)
+    #                     self.messenger.log_msg_trace(data, meta, f"SUB PUSH iteration from {self.subject}")
+    #                     meta['receive_mode'] = 'push'
+    #                     if f'{meta["id"]}{meta["ts"]}' in self.id_cache:
+    #                         log.debug(f"Skipping duplicated message from {self.subject}")
+    #                         bmsg = data = meta = None
+    #                         continue
+    #                     break
+    #                 except nats.errors.TimeoutError:
+    #                     pass  # keep iterating
+    #                 except (nats.errors.ConnectionClosedError, _ReconnectNeededError):
+    #                     if self.on_connection_close == 'RAISE':
+    #                         log.warning(f'Connection closed, raising exception on {self}')
+    #                         raise
+    #                     elif self.on_connection_close == 'FINISH':
+    #                         log.warning(f'Connection closed, finishing iteration on {self}')
+    #                         self._stop.set()
+    #                     else:
+    #                         assert self.on_connection_close == 'WAIT'
+    #                         log.warning(f'Connection closed, waiting for reconnect on {self}')
+    #                         await asyncio.sleep(1.0)
+    #                         transform_to_pull = True
+    #                         keep_pulling = True
+    #                         break
+    #
+    #                 except Exception as e:
+    #                     log.error(f"During interation on {self}, push subscription.next_msg raised {e}")
+    #                     await self.close()
+    #                     raise e
+    #
+    #     if bmsg is None:
+    #         log.debug(f"No message to return, closing {self}")
+    #         await self.close()
+    #         raise MessengerReaderStopped
+    #     cachedid = f'{meta["id"]}{meta["ts"]}'
+    #     try:
+    #         self.id_cache.add(cachedid)
+    #     except Exception as e:
+    #         log.error(f"Error adding id: {cachedid} of msg: data={data} meta={meta} to id_cache: {e}")
+    #     log.debug(f"Returning message {self}")
+    #     self.last_seq = meta['nats']['seq']
+    #     self._msg_processed.set()
+    #     return data, meta
 
     async def open(self) -> None:
         if self.pull_subscription is not None:
@@ -272,6 +281,20 @@ class MsgReader(MsgDriver):
         return await self.connection.js.pull_subscribe(self.subject,
                                                        durable=consumer_conf.durable_name,
                                                        config=consumer_conf)
+    async def _reopen(self) -> None:
+        try:
+            await self.pull_subscription.unsubscribe()
+        except Exception:
+            pass
+        consumer_conf = await self._create_consumer_cfg()
+        # set policy for 'new messages' for BY_START_SEQUENCE if any message was received
+        if self.last_seq is not None:
+            consumer_conf.deliver_policy = DeliverPolicy.BY_START_SEQUENCE
+            consumer_conf.opt_start_time = None
+            consumer_conf.opt_start_seq = self.last_seq + 1
+        self.pull_subscription = await self._create_pull_subscribtion(consumer_conf=consumer_conf)
+
+
 
     async def _transform_to_pull_sub(self):
         log.info(f"Attempt to transform {self.subject} MeassageReader mode to PULL (from seq: {self.last_seq})")

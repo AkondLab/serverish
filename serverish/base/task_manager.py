@@ -38,6 +38,9 @@ class Task(HasStatuses):
     def start_sync(self):
         """Runs the task. Sync method"""
         def done_cb(task):
+            if task.exception():
+                logger.error(f'Task {self.name} failed: {task.exception()}')
+                self.set_status('running', Status.new_fail(msg=f'Task failed: {task.exception()}'))
             logger.debug(f'Task {self.name} done')
             self.set_status('running', Status.new_na(msg='Task finished'))
             self.remove_parent()
