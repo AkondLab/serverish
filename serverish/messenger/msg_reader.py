@@ -108,6 +108,8 @@ class MsgReader(MsgDriver):
                 except nats.js.errors.NotFoundError:
                     log.warning(f"Consumer has gone, trying to recreate it on {self}")
                     await self._reopen()
+                except nats.errors.TimeoutError:
+                    log.warning(f"Consumer (nats) timeout), but we will keep trying {self}")
 
             try:
                 timeout = min(0.2 + n/5, 5)  # start fast and slow down to 5s
