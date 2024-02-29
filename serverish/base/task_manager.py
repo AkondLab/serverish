@@ -44,7 +44,7 @@ class Task(HasStatuses):
                     logger.debug(f'Task {self.name} canceled')
                     self.set_status('running', Status.new_na(msg='Task canceled'))
                 else:
-                    logger.error(f'Task {self.name} failed: {task.exception()}')
+                    logger.error(f'Task {self.name} failed: {task.exception()}', exc_info=task.exception())
                     self.set_status('running', Status.new_fail(msg=f'Task failed: {task.exception()}'))
             else:
                 logger.debug(f'Task {self.name} done')
