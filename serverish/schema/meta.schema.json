@@ -32,6 +32,11 @@
                 "type": "string"
             }
         },
+        "status": {
+            "type": "string",
+            "description": "Statuss message, if any. Check tags for `error` tag."
+            }
+        },
         "nats": {
             "type": "object",
             "properties": {

@@ -12,7 +12,7 @@ class MsgSinglePublisher(MsgPublisher):
     Anyway Messenger should be initialized before usage of this class.
     """
 
-    async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
+    async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict | None:
         await self.open()
         try:
             return await super().publish(data, meta=meta, **kwargs)

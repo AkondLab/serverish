@@ -101,7 +101,10 @@ class MsgProgressPublisher(MsgPublisher):
 
     The class interface, as well as some implementation, are taken or inspired from "rich" library,
     therefore documentation and usage of `rich.Progress` class can be used as a reference.
+
+    Note, that raise_on_publish_error is set to False by default, which differs from the default in MsgPublisher.
     """
+    raise_on_publish_error = param.Boolean(default=False)  # override default
     tasks = param.Dict(default={}, doc="Tasks being tracked")
 
     async def track(
