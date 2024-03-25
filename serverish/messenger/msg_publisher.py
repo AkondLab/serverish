@@ -22,7 +22,7 @@ class MsgPublisher(MsgDriver):
 
     raise_on_publish_error = param.Boolean(default=True, doc="Raise on publish error")
 
-    async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict | None:
+    async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
         """Publishes a messages to publisher subject
 
         Args:
