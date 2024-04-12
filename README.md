@@ -10,6 +10,10 @@
 See [`doc` directory](doc/) for more documentation.
 
 ## Optional (extras) dependencies
+Following extras are available:
+* `messenger` - for using NATS based Messenger. Will install `nats-py` package.
+* `dns` - for using `aiodns` DNS resolver for connection status diagnostics, it's extracted as an extra dependency because it's not available on all platforms.
+
 In order to use Messenger, you have to add extra 'messenger' to your `project.toml` serveris dependency, e.g.:
 ```toml
 serverish = {git="https://github.com/AkondLab/serverish.git", extras=["messenger"], branch="master"}

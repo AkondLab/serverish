@@ -119,6 +119,17 @@ class MsgReader(MsgDriver):
                 log.debug(f"Pulled {len(self.pull_batch)} messages from {self}")
             except nats.errors.TimeoutError:
                 pass
+            except nats.errors.ConnectionClosedError:
+                if self.on_connection_close == 'RAISE':
+                    log.warning(f'Connection closed, raising exception on {self}')
+                    raise
+                elif self.on_connection_close == 'FINISH':
+                    log.warning(f'Connection closed, finishing iteration on {self}')
+                    self._stop.set()
+                else:
+                    assert self.on_connection_close == 'WAIT'
+                    log.warning(f'Connection closed, waiting for reconnect on {self}')
+                    await asyncio.sleep(1.0)
             n += 1
 
         self._emptied.clear()

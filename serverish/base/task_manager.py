@@ -38,18 +38,18 @@ class Task(HasStatuses):
     def start_sync(self):
         """Runs the task. Sync method"""
         def done_cb(task):
-            e = task.exception()
-            if e is not None:
-                if isinstance(e, asyncio.CancelledError):
-                    logger.debug(f'Task {self.name} canceled')
-                    self.set_status('running', Status.new_na(msg='Task canceled'))
-                else:
+            try:
+                e = task.exception()
+            except asyncio.CancelledError:
+                logger.debug(f'Task {self.name} canceled')
+                self.set_status('running', Status.new_na(msg='Task canceled'))
+            else:
+                if e is not None:
                     logger.error(f'Task {self.name} failed: {task.exception()}', exc_info=task.exception())
                     self.set_status('running', Status.new_fail(msg=f'Task failed: {task.exception()}'))
-            else:
-                logger.debug(f'Task {self.name} done')
-                self.set_status('running', Status.new_na(msg='Task finished'))
-
+                else:
+                    logger.debug(f'Task {self.name} done')
+                    self.set_status('running', Status.new_na(msg='Task finished'))
             self.remove_parent()
 
         self.task = asyncio.create_task(self.coro, name=self.name)
