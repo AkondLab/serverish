@@ -37,13 +37,16 @@ class Rpc:
         """
         assert self.answered is False, "Response already sent"
         self.set_response(data, meta)
+        log.info(f'Sending RPC response as respond-now, meta: {meta}')
         await self.send_response()
+        log.info(f'Sent RPC response as respond-now, meta: {meta}')
 
     async def send_response(self):
         self.answered = True
         messenger = Messenger() # this is singleton anyway
         msg = messenger.create_msg(data=self.resp_data, meta=self.resp_meta)
         bmsg = messenger.encode(msg)
+        log.info('Passing RPC response to NATS')
         await self.nats_msg.respond(bmsg)
 
 
@@ -107,7 +110,9 @@ class MsgRpcResponder(MsgDriver):
                 raise ValueError(f"Callback {callback} returned {ret}, expected None, "
                                  f"use rpc.set_response() to set return value")
             if not rpc.answered:
+                log.info(f'Sending RPC {self.subject} response at the end of RPC callback')
                 await rpc.send_response()
+                log.info(f'Sent RPC {self.subject} response at the end of RPC callback')
 
 
         self.subscription = await nats.subscribe(self.subject, queue=self.subject, cb=_cb)
