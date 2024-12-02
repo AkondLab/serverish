@@ -54,7 +54,9 @@ class MsgJournalPublisher(MsgPublisher):
 
     Use this class for text based, log-like messages to be displayed for a user.
     Interface mimics `logging` module, but note, that methods are async.
+    Note, that raise_on_publish_error is set to False by default, which differs from the default in MsgPublisher.
     """
+    raise_on_publish_error = param.Boolean(default=False)  # override default
     conversations = param.Dict(default={}, doc="Conversations being tracked")
 
     _nameToLevel = None

@@ -10,6 +10,10 @@
 See [`doc` directory](doc/) for more documentation.
 
 ## Optional (extras) dependencies
+Following extras are available:
+* `messenger` - for using NATS based Messenger. Will install `nats-py` package.
+* `dns` - for using `aiodns` DNS resolver for connection status diagnostics, it's extracted as an extra dependency because it's not available on all platforms.
+
 In order to use Messenger, you have to add extra 'messenger' to your `project.toml` serveris dependency, e.g.:
 ```toml
 serverish = {git="https://github.com/AkondLab/serverish.git", extras=["messenger"], branch="master"}
@@ -23,6 +27,7 @@ this will install `nats-py` package.
 - Pytest fixtures for NATS on CI
 
 ## Changes
+* 1.1 Switches to `param` 2.* nad `py-nats` 1.7.*. Also, publisher may reraise exceptions or ignore them.
 * 1.0  Changes NATS subscriptions to pull only
 * 0.12 Extends messges metdata of `nats` section, Handles reconnection of subscriptions, 
 * 0.11 Extends, tasks, NATS connection tracking and messenger opening options (`Messenger.open`)

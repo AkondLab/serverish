@@ -2,6 +2,7 @@
 `serverish.messenger.msg_journal_pub` and `serverish.messenger.msg_journal_read` modules.
 """
 import asyncio
+import logging
 
 import pytest
 
@@ -39,6 +40,28 @@ async def test_messenger_publishing():
         await publisher.critical('test critical: hello %s', 'world')
         await publisher.debug('test debug: hello %s', 'world')
         await publisher.notice('test exception: hello %s', 'world')
+
+
+
+@pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skip(reason="Slow test - manual debugging only")
+@pytest.mark.sxkipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_messenger_publishing_slow():
+    subject = 'test.messenger.test_messenger_publishing_slow'
+
+    async with Messenger().context(host='localhost', port=4222) as mess:
+        await mess.purge(subject)
+        publisher = get_journalpublisher(subject)
+        for i in range(100):
+            try:
+                await publisher.info('Message %d', i)
+            except Exception as e:
+                logging.error(f"Failed to publish message {i}, Exception {type(e)}: {e}")
+            else:
+                logging.info(f"Published message {i}")
+            await asyncio.sleep(1.0)
+
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async

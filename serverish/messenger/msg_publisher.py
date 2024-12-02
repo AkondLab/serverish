@@ -3,6 +3,7 @@ from __future__ import annotations
 import jsonschema
 import nats.errors
 import nats.js
+import param
 
 from serverish.base import MessengerNotConnected
 from serverish.messenger import Messenger
@@ -14,14 +15,25 @@ class MsgPublisher(MsgDriver):
 
     Use this class if you want to publish data to a messenger subject.
     Check for specialist publishers for common use cases.
+
+    Parameters:
+        raise_on_publish_error (bool): Raise on publish error, default `True` re-raises underlying exceptions
     """
+
+    raise_on_publish_error = param.Boolean(default=True, doc="Raise on publish error")
+
     async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
         """Publishes a messages to publisher subject
 
         Args:
             data (dict): message data
+            meta (dict): message metadata
             kwargs: additional arguments to pass to the connection
-
+        Returns:
+            dict: published message, or message to be published with the `error` tag in meta if failed
+        Raises:
+            Raises nats errors if the message could not be published until `raise_on_publish_error` is set to True
+            otherwise logs the error, and returns the message with the `error` tag and `status` set to the error message.
         """
         msg = self.messenger.create_msg(data, meta)
         bdata = self.messenger.encode(msg)
@@ -45,7 +57,11 @@ class MsgPublisher(MsgDriver):
         except Exception as e:
             log.error(f"Trying to publish to subject '{self.subject}' failed. "
                       f"Message {msg['meta']['id']} publish error: {e}")
-            raise e
+            if self.raise_on_publish_error:
+                raise e
+            else:
+                msg['meta']['tags'].append('error')
+                msg['meta']['status'] = str(e)
         return msg
 
 
