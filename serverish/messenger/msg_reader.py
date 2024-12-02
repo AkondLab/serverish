@@ -22,6 +22,7 @@ log = logging.getLogger(__name__.rsplit('.')[-1])
 log_debug_reader = logging.getLogger("rdr_debug")
 
 # Configure the debug logger
+log_debug_reader.propagate = False
 try:
     from uuid import uuid4
     app_id = uuid4()
@@ -33,9 +34,10 @@ try:
     log_debug_reader.addHandler(handler)
     log_debug_reader.setLevel(logging.DEBUG)
     log.info(f"NATS Reader logger initialized with file: {log_file}")
+    print(f"NATS Reader logger initialized with file: {log_file}")
 except Exception as e:
     log.error(f"Failed to initialize NATS Reader logger: {e}")
-    log_debug_reader.propagate = False
+    print(f"Failed to initialize NATS Reader logger: {e}")
 
 
 class _ReconnectNeededError(Exception):
