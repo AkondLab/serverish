@@ -100,13 +100,16 @@ class MsgRpcResponder(MsgDriver):
                 else:
                     ret = await acb(rpc)
             except Exception as e:
+                log.error(f'Exception occurred in {callback}')
                 log.exception(f'Error in callback {callback} for message {meta}{str(data):20}: {e}')
                 if not rpc.answered:
+                    log.info(f'Setting error RPC response')
                     rpc.set_response(data=None, meta={'status': 'error', 'error': f'{e}'})
             if ret is not None:
                 raise ValueError(f"Callback {callback} returned {ret}, expected None, "
                                  f"use rpc.set_response() to set return value")
             if not rpc.answered:
+                log.info(f'Sending RPC response to {self.subject} because {callback} exited without sending enything')
                 await rpc.send_response()
 
 
