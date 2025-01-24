@@ -8,11 +8,40 @@
         "measurements": {
             "type": "object"
         },
+        "statuses": {
+            "type": "object"
+        },
+        "errors": {
+            "type": "object",
+            "patternProperties": {
+                ".*": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {
+                            "type": "string"
+                        },
+                        "error": {
+                            "type": "string"
+                        },
+                        "description": {
+                            "type": "string"
+                        }
+                    },
+                    "required": ["kind", "error"],
+                    "additionalProperties": true
+                }
+            }
+        },
         "version": {
             "type": "string"
         }
     },
-    "required": ["ts", "measurements"],
+    "required": ["ts"],
+    "anyOf": [
+        { "required": ["measurements"] },
+        { "required": ["statuses"] },
+        { "required": ["errors"] }
+    ],
     "definitions": {
         "timestamp": {
             "type": "array",
