@@ -22,7 +22,7 @@ class ConnectionJetStream(ConnectionNATS):
                              '- JetStream streams to be created as mapping of stream name to stream parameters. ',
                          )
 
-    declared_subjects = param.List(default=[], class_=str,
+    declared_subjects = param.List(default=[], item_type=str,
                                    doc='List of declared subjects which have to be handled by JetStream. '
                                        'It is used for diagnostics, so declaration is not obligatory.')
 

@@ -186,6 +186,10 @@ async def test_messenger_pub_sub_pub():
     assert len(collected) == 21
 
 
+@pytest.mark.asyncio  # This tells pytest this test is async
+@pytest.mark.skip("Experimental long test, not for automated testing")
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_messenger_pub_time_pub_sub():
 
     pub = get_publisher('test.messenger.test_messenger_pub_time_pub_sub')

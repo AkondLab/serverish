@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from logging.handlers import RotatingFileHandler
 import asyncio
 from asyncio import Event
 from collections import deque
@@ -19,26 +18,6 @@ from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
-log_debug_reader = logging.getLogger("rdr_debug")
-
-# Configure the debug logger
-log_debug_reader.propagate = False
-try:
-    from uuid import uuid4
-    app_id = uuid4()
-    log_file = f"/tmp/debug_reader_{app_id}.log"
-    handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=1)
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    log_debug_reader.addHandler(handler)
-    log_debug_reader.setLevel(logging.DEBUG)
-    log.info(f"NATS Reader logger initialized with file: {log_file}")
-    print(f"NATS Reader logger initialized with file: {log_file}")
-except Exception as e:
-    log.error(f"Failed to initialize NATS Reader logger: {e}")
-    print(f"Failed to initialize NATS Reader logger: {e}")
-
 
 class _ReconnectNeededError(Exception):
     pass
@@ -125,21 +104,12 @@ class MsgReader(MsgDriver):
                 # check consumer, maybe ephemeral consumer is gone
                 # if is OK, signal that we were empty (n > 2 means that we tried to pull messages for a while
                 try:
-                    log_debug_reader.debug(
-                        f"Attempt ({n + 1}), delay ({datetime.now() - read_start_time}) Checking consumer_info for {self}")
-
                     ci = await self.pull_subscription.consumer_info()
-                    log_debug_reader.debug(
-                        f"Attempt ({n + 1}), delay ({datetime.now() - read_start_time}) consumer_info OK for {self}")
                     self._emptied.set()
                 except nats.js.errors.NotFoundError:
                     log.warning(f"Consumer has gone, ({datetime.now() - read_start_time}s of pulling) trying to recreate it on {self}")
-                    log_debug_reader.debug(
-                        f"Attempt ({n + 1}), delay ({datetime.now() - read_start_time}) consumer_info GONE for {self}")
                     await self._reopen()
                 except nats.errors.TimeoutError:
-                    log_debug_reader.debug(
-                        f"Attempt ({n + 1}), delay ({datetime.now() - read_start_time}) consumer_info timeout for {self}")
                     log.warning(f"Consumer (nats) timeout), but we will keep trying {self}")
 
             try:
@@ -147,13 +117,10 @@ class MsgReader(MsgDriver):
                 batch = 1 if n > 1 else 100
                 log.debug(f"Pulling {batch} in {timeout}s from {self}")
                 self.pull_batch = deque(await self.pull_subscription.fetch(batch=batch, timeout=timeout))
-                log_debug_reader.debug(f"Attempt ({n+1}), delay ({datetime.now() - read_start_time}) Pulled {len(self.pull_batch)} messages from {self}")
                 log.debug(f"Pulled {len(self.pull_batch)} messages from {self}")
             except nats.errors.TimeoutError:
-                log_debug_reader.debug(f"Attempt ({n+1}), delay ({datetime.now() - read_start_time}) Timeout pulling from {self}")
                 pass
             except nats.errors.ConnectionClosedError:
-                log_debug_reader.debug(f"Attempt ({n+1}), delay ({datetime.now() - read_start_time}) ConnectionClosedError when pulling from {self}")
                 if self.on_connection_close == 'RAISE':
                     log.warning(f'Connection closed, raising exception on {self}')
                     raise
