@@ -9,8 +9,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Sequence
 
-import param
-
 from serverish.base import dt_ensure_array, dt_utcnow_array
 from serverish.base.idmanger import gen_uid
 from serverish.messenger import Messenger
@@ -56,13 +54,16 @@ class MsgJournalPublisher(MsgPublisher):
     Interface mimics `logging` module, but note, that methods are async.
     Note, that raise_on_publish_error is set to False by default, which differs from the default in MsgPublisher.
     """
-    raise_on_publish_error = param.Boolean(default=False)  # override default
-    conversations = param.Dict(default={}, doc="Conversations being tracked")
 
-    _nameToLevel = None
+    _nameToLevel: dict[str, int] = None
+
+    def __init__(self, subject: str, **kwargs):
+        super().__init__(subject, raise_on_publish_error=False, **kwargs)
+        self.conversations: dict[str, JournalEntry] = {}
+
 
     @classmethod
-    def checkLevel(cls, level: int | str):
+    def check_level(cls, level: int | str):
         """Copied from logging module"""
         if isinstance(level, int):
             rv = level
@@ -109,7 +110,7 @@ class MsgJournalPublisher(MsgPublisher):
         entry = JournalEntry(
             driver=self,
             conversation_id=gen_uid('journal'),
-            level=self.checkLevel(level),
+            level=self.check_level(level),
             message=message.format(*args),
             timestamp=dt_ensure_array(timestamp),
             explanation=explanation,

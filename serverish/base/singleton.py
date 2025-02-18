@@ -1,9 +1,7 @@
-from param.parameterized import ParameterizedMetaclass
-
 from serverish.base.collector import Collector
 
-
-class SingletonMeta(ParameterizedMetaclass):
+class SingletonMeta(type):
+    """Metaclass ensuring a class has only one instance."""
     _instances = {}
 
     def __call__(cls, *args, **kwargs):
@@ -12,8 +10,6 @@ class SingletonMeta(ParameterizedMetaclass):
             cls._instances[cls] = instance
         return cls._instances[cls]
 
-
 class Singleton(Collector, metaclass=SingletonMeta):
-    """Singleton base class. One instance per one concrete class"""
+    """Singleton base class. One instance per concrete class."""
     pass
-

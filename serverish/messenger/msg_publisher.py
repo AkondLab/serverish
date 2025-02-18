@@ -3,7 +3,6 @@ from __future__ import annotations
 import jsonschema
 import nats.errors
 import nats.js
-import param
 
 from serverish.base import MessengerNotConnected
 from serverish.messenger import Messenger
@@ -20,7 +19,9 @@ class MsgPublisher(MsgDriver):
         raise_on_publish_error (bool): Raise on publish error, default `True` re-raises underlying exceptions
     """
 
-    raise_on_publish_error = param.Boolean(default=True, doc="Raise on publish error")
+    def __init__(self, subject: str, raise_on_publish_error: bool = True, **kwargs):
+        super().__init__(subject, **kwargs)
+        self.raise_on_publish_error = raise_on_publish_error
 
     async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
         """Publishes a messages to publisher subject

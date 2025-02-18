@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "serverish"
-version = "1.1.6"
+version = "2.0.0"
 description = "helpers for server alike projects"
 authors = ["Mikołaj Kałuszyński", "MMME team"]
 readme = "README.md"
@@ -10,9 +10,9 @@ include = ["serverish/schema/*"]
 [tool.poetry.dependencies]
 python = "^3.8"
 aiodns = {version="^3.2.0", optional=true}
-param = "^2.1.0"
 nats-py = { version = "^2.7.2", optional= true}
 jsonschema = "^4.20.0"
+pydantic = "^2.10.6"
 
 [tool.poetry.extras]
 messenger = ["nats-py"]

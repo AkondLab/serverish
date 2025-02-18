@@ -5,8 +5,6 @@ import logging
 import socket
 from typing import Iterable, Tuple
 
-import param
-
 from nats.aio.client import Client as NATS
 
 from serverish.connection import Connection
@@ -17,21 +15,16 @@ _logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 class ConnectionNATS(Connection):
     """Watches NATS connection and reports status"""
-    subject_prefix = param.String(default='srvh')
-    nc = param.ClassSelector(class_=NATS, allow_None=True)
 
-    def __init__(self, host: str|Iterable[str], port: int|Iterable[int] = 4222,
-                 subject_prefix: str = 'srvh',
+    def __init__(self, host: str|Iterable[str], port: int|Iterable[int]|None,
                  **kwargs):
         """Initializes connection watcher
 
-        Args:
-            host (str): Hostname or IP address
-            port (int): Port number
+        Args: see `Connection`
         """
         super().__init__(host=host, port=port,
-                         subject_prefix=subject_prefix,
                          **kwargs)
+        self.nc: NATS | None = None
         self.add_check_methods(at_beginning=True,
                                nats_op = self.diagnose_nats_server_op,
                                nats_connected=self.diagnose_nats_connected,

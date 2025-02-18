@@ -5,8 +5,6 @@ from typing import Callable
 import asyncio
 from asyncio import Event, CancelledError
 
-import param
-
 from serverish.base import Task, create_task
 from serverish.messenger import Messenger
 from serverish.messenger.msg_reader import MsgReader
@@ -19,9 +17,14 @@ class MsgCallbackSubscriber(MsgReader):
 
     This class works like `MsgReader`, but allows to specify a callback function for each message instead of iterating
     """
-    callback = param.Callable(default=None, doc="Callback function to call on each message")
-    task = param.ClassSelector(default=None, class_=Task, doc="Task for reading messages")
-    _stop_event = param.ClassSelector(default=Event(), class_=Event, doc="Event to stop reading messages")
+
+    def __init__(self, subject: str,
+                 callback: Callable[[dict, dict], bool] | Callable[[dict, dict], asyncio.Future] | None = None,
+                 **kwargs):
+        super().__init__(subject=subject, **kwargs)
+        self.callback: Callable[[dict, dict], bool] | Callable[[dict, dict], asyncio.Future] = callback
+        self.task: Task | None = None
+        self._stop_event: Event = Event()
 
     async def open(self) -> None:
         return await super().open()
@@ -36,7 +39,7 @@ class MsgCallbackSubscriber(MsgReader):
         """Stops reading messages"""
         self._stop_event.set()
 
-    async def subscribe(self, callback: Callable[[dict, dict], bool] | Callable[[dict, dict], asyncio.Future]) -> None:
+    async def subscribe(self, callback: Callable[[dict, dict], bool] | Callable[[dict, dict], asyncio.Future]) -> Task:
         """Sets a callback function for each message
 
         Args:

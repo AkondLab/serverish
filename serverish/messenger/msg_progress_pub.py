@@ -7,9 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from operator import length_hint
-from typing import Iterable, Sequence, TypeVar, Optional
-
-import param
+from typing import Iterable, Sequence, TypeVar, Optional, AsyncIterator
 
 from serverish.base import dt_to_array, dt_from_array
 from serverish.base.idmanger import IdManager
@@ -104,8 +102,9 @@ class MsgProgressPublisher(MsgPublisher):
 
     Note, that raise_on_publish_error is set to False by default, which differs from the default in MsgPublisher.
     """
-    raise_on_publish_error = param.Boolean(default=False)  # override default
-    tasks = param.Dict(default={}, doc="Tasks being tracked")
+    def __init__(self, subject: str, raise_on_publish_error: bool = False, **kwargs):
+        super().__init__(subject, raise_on_publish_error=raise_on_publish_error, **kwargs)
+        self.tasks: dict[str, ProgressTask] = {}
 
     async def track(
             self,
@@ -113,7 +112,7 @@ class MsgProgressPublisher(MsgPublisher):
             total: Optional[float] = None,
             task_id: Optional[str] = None,
             description: str = "Working...",
-    ) -> Iterable[ProgressType]:
+    ) -> AsyncIterator[ProgressType]:
 
         if total is None:
             total = float(length_hint(sequence)) or None

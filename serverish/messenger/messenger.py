@@ -17,7 +17,6 @@ import json
 import functools
 from typing import TYPE_CHECKING
 
-import param
 import nats
 from nats.aio.msg import Msg
 
@@ -43,14 +42,14 @@ class MsgData:
 
 
 class Messenger(Singleton):
-    conn = param.ClassSelector(class_=ConnectionJetStream, default=None, allow_None=True, doc="Messenger Connection")
-    validation = param.Boolean(default=True, doc="Validate messages against schema")
-    default_host = param.List(default=['localhost'], item_type=str, doc="Default NATS host name(s)")
-    default_port = param.List(default=[4222], item_type=int, doc="Default NATS port number(s)")
-
-    def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
+    def __init__(self, name: str = None, parent: Collector = None, validation: bool = True, **kwargs) -> None:
         self.validator = MsgValidator()
         self.opener_task: Task | None = None
+        self.conn: ConnectionJetStream | None = None
+        self.validation: bool = validation
+        self.default_host = ['localhost']
+        self.default_port = [4222]
+
         super().__init__(name, parent, **kwargs)
 
     @property
@@ -59,7 +58,9 @@ class Messenger(Singleton):
             raise ValueError("Messenger connection have not been opened, use configure(host, port) first")
         return self.conn
 
-    async def open(self, host: str | None = None, port: int | None = None,
+    async def open(self,
+                   host: str | Iterable[str] | None = None,
+                   port: int | Iterable[int] | None = None,
                    wait: float | bool = True, timeout: float | None = None) -> Task | None:
         """Opens a connection to NATS
 
@@ -79,8 +80,8 @@ class Messenger(Singleton):
         is established, and the caller will have to check `Messenger.is_open` or wait for the returned task to finish.
 
         Args:
-            host (str): Hostname or IP address
-            port (int): Port number
+            host (str): Hostname or IP address or host:port, may be list of hosts to try
+            port (int): Port number, may be list of ports in respective order to hosts
             wait (float or bool): if True, will wait for the connection to be established,
                 if False, will return immediately,
                 if a number, will wait for given number of seconds or until the connection is established,
@@ -512,8 +513,6 @@ class Messenger(Singleton):
 
 
 class MsgDriver(Manageable):
-    subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
-    is_open: bool = param.Boolean(default=False, doc="Has the driver been opened")
     """Message subject operator
 
     Message publisher/subsriber etc base
@@ -522,7 +521,14 @@ class MsgDriver(Manageable):
         subject (str): subject to publish to
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, subject: str | None = None, **kwargs):
+        """Initializes message driver
+
+        Args:
+            subject (str): subject to publish to
+        """
+        self.subject: str | None = subject
+        self.is_open: bool = False
         super().__init__(**kwargs)
 
     @property

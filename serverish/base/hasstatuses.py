@@ -1,9 +1,6 @@
-from __future__ import annotations
 import asyncio
 import logging
 from typing import Callable, Awaitable, Union
-
-import param
 
 from serverish.base.collector import Collector
 from serverish.base.manageable import Manageable
@@ -11,27 +8,20 @@ from serverish.base.status import Status, StatusEnum
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
-CheckMethodType = Callable[[], Union[Awaitable[Status], Status]]
+CheckMethodType = Callable[[], Awaitable[Status] | Status]
+
 
 class HasStatuses(Manageable):
-    """Controls the resource
+    """Controls the resource"""
 
-    Parameters
-    ----------
-    status : dict[str, Status], optional
-        Statuses of the resource, by default None
-
-    """
     @staticmethod
     def diagnose_dummy_ok() -> Status:
         """Dummy diagnosis, returns StatusEnum.ok"""
         return Status.new_ok(msg='Dummy OK')
 
-    status = param.Dict(default={}, doc='A dictionary to hold status information')
-
-    def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
+    def __init__(self, name: str | None = None, parent: Collector | None = None, **kwargs) -> None:
         self.check_methods: dict[str, CheckMethodType] = {'main': self.diagnose_dummy_ok}
-
+        self.status: dict[str, Status] = {}
         super().__init__(name, parent, **kwargs)
 
     def set_check_methods(self, **methods: CheckMethodType) -> None:
@@ -42,15 +32,10 @@ class HasStatuses(Manageable):
         is the same.
         E.g. if 'ping' is OK, we deduce that 'dns' is OK too.
         One can force all diagnotics to be run by setting no_deduce=True in diagnose() call.
-
-
-        Args:
-            **methods (dict[str, CheckMethodType]): Dict of asynchronous methods
         """
         self.check_methods = methods
 
-    def add_check_methods(self, at_beginning: bool,
-                          **methods: CheckMethodType) -> None:
+    def add_check_methods(self, at_beginning: bool, **methods: CheckMethodType) -> None:
         """Adds check methods
 
         Methods are called in order, values of later methods may be deduced from earlier ones:
@@ -58,10 +43,6 @@ class HasStatuses(Manageable):
         is the same.
         E.g. if 'ping' is OK, we deduce that 'dns' is OK too.
         One can force all diagnotics to be run by setting no_deduce=True in diagnose() call.
-
-        Args:
-            at_beginning (bool): If True, adds methods at the beginning of the list.
-            **methods (dict[str, Callable]): Dict of asynchronous methods to add
         """
         if at_beginning:
             self.check_methods = {**methods, **self.check_methods}
@@ -72,12 +53,7 @@ class HasStatuses(Manageable):
         """Sets status of the resource
 
         A resource can have multiple statuses, e.g. 'main', 'dns', 'http', etc.
-        Args:
-            key (str): Status name
-            value (Status): Status object
         """
-        if self.status is None:
-            self.status = {}
         if value is None:
             self.status.pop(key, None)
         else:
@@ -93,12 +69,9 @@ class HasStatuses(Manageable):
         E.g. if 'ping' is OK, we deduce that 'dns' is OK too.
 
         One can force all diagnotics to be run by setting no_deduce=True.
-
-        Args:
-            no_deduce (bool, optional): If True, don't deduce statuses from other statuses. Defaults to False.
         """
 
-        async def calc_state(m):
+        async def calc_state(m: CheckMethodType) -> Status:
             if asyncio.iscoroutinefunction(m):
                 return await m()
             else:
@@ -132,12 +105,9 @@ class HasStatuses(Manageable):
         E.g. if 'ping' is OK, we deduce that 'dns' is OK too.
 
         One can force all diagnotics to be run by setting no_deduce=True.
-
-        Args:
-            no_deduce (bool, optional): If True, don't deduce statuses from other statuses. Defaults to False.
         """
 
-        def calc_state(m):
+        def calc_state(m: CheckMethodType) -> Status:
             if asyncio.iscoroutinefunction(m):
                 return Status.new_na(msg='Skipped async test')
             else:
@@ -160,7 +130,7 @@ class HasStatuses(Manageable):
                 res.append(r)
         return {n: r for n, r in zip(self.check_methods.keys(), res)}
 
-    async def update_statuses(self, no_deduce = False) -> None:
+    async def update_statuses(self, no_deduce: bool = False) -> None:
         """Updates statuses of the resource
 
         Args:
@@ -172,7 +142,7 @@ class HasStatuses(Manageable):
         for n, s in statuses.items():
             self.set_status(n, s)
 
-    def update_sync_statuses(self, no_deduce = False) -> None:
+    def update_sync_statuses(self, no_deduce:bool = False) -> None:
         """Updates statuses of the resource skipping async methods
 
         Args:
@@ -185,12 +155,7 @@ class HasStatuses(Manageable):
             self.set_status(n, s)
 
     def point_of_failure(self) -> (str | None, Status | None):
-        """Returns the most low-level failed status - most probably the point of failure
-
-        Returns:
-            (str, Status): Name and status of the most low-level failed status
-        """
-
+        """Returns the most low-level failed status - most probably the point of failure"""
         for k, s in reversed(self.status.items()):
             if s == StatusEnum.fail:
                 return k, s

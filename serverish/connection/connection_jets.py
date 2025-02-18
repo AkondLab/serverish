@@ -6,7 +6,6 @@ import re
 
 import nats
 from nats.js import JetStreamContext
-import param
 
 from serverish.connection.connection_nats import ConnectionNATS
 from serverish.base.status import Status
@@ -17,41 +16,20 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 class ConnectionJetStream(ConnectionNATS):
     """Watches JetStream connection and reports status"""
 
-    streams = param.Dict(default={},  # {'test': {'subjects': ['test.*']}},  #  {'srvh-s': {'subjects': ['srvh']}},
-                         doc='DEPRECATED(Configure streams externally) '
-                             '- JetStream streams to be created as mapping of stream name to stream parameters. ',
-                         )
-
-    declared_subjects = param.List(default=[], item_type=str,
-                                   doc='List of declared subjects which have to be handled by JetStream. '
-                                       'It is used for diagnostics, so declaration is not obligatory.')
-
-    js = param.ClassSelector(class_=JetStreamContext, allow_None=True)
 
     def __init__(self,
                  host: str | Iterable[str], port: int | Iterable[int] = 4222,
-                 subject_prefix: str = 'srvh',  # NATS parameters
-                 streams: Mapping[str, Mapping[str, Any]] | None = None,  # JetStream parameters
                  **kwargs):
         """Initializes connection watcher
 
         Args:
             host (str): Hostname(s) or IP address(es)
             port (int): Port number(s)
-            subject_prefix (str): Prefix for all subjects
-            streams (Mapping[str, Mapping[str, Any]]):
-                JetStream streams to be created as mapping of stream name to stream parameters.
-                The stream parameters are described in the NATS documentation.
-                Usually, the subjects parameter is the one that needs to be set.
         """
-        if streams is not None:
-            kwargs['streams'] = streams  # to be initialized on param level
         super().__init__(host=host, port=port,
-                         subject_prefix=subject_prefix,
                          **kwargs)
+        self.js: JetStreamContext | None = None
         self.add_check_methods(at_beginning=True,
-                               # jets_config=self.diagnose_stream_config,
-                               jets_subjects=self.diagnose_stream_subjects,
                                jets_strem=self.diagnose_stream_exists,
                                jets_init=self.diagnose_jetstream_init,
                                )
@@ -66,19 +44,6 @@ class ConnectionJetStream(ConnectionNATS):
             return
         else:
             self.setup_jetstream()
-        # Persist messages on 'foo's subject.
-        # await self.js.add_stream(name="sample-stream", subjects=["foo"])
-        # await self.js.add_stream(name="sample-stream", subjects=["foo"])
-        # await self.js.add_stream(name="dupa", subjects=['srvh.test.js.foo'])
-        # await self.js.add_stream(name="dupa2", subjects=['srvh.test.js.foo2'])
-        # await self.js.add_stream(name="srvh-s", subjects=['srvh.test.js.foo1'])
-        # logger.warning('So far so good')
-
-        for stream, params in self.streams.items():
-            try:
-                await self.js.add_stream(name=stream, **params)
-            except Exception as e:
-                logger.error(f"Error creating stream {stream}: {e}")
 
         await self.update_statuses()
 
@@ -149,9 +114,6 @@ class ConnectionJetStream(ConnectionNATS):
         Returns:
             Status: Status object
         """
-        # No streams here is the new normal
-        # if not self.streams:
-        #     return Status.fail(msg='Streams config empty')
         try:
             for s in self.streams:
                 if re.match(r'^[a-zA-Z0-9_-]+$', s) is None:
@@ -189,23 +151,3 @@ class ConnectionJetStream(ConnectionNATS):
             return Status.new_fail(msg=f'Error getting streams info: {e}')
         return Status.new_ok(msg='Stream(s) exist')
 
-    async def diagnose_stream_subjects(self) -> Status:
-        """Diagnoses streams for declared subjects
-
-        Returns:
-            Status: Status object
-        """
-        js: JetStreamContext = self.js
-        if js is None:
-            return Status.new_fail(msg='Not initialized')
-        if not self.declared_subjects:
-            return Status.new_na(msg='No declared subjects')
-        try:
-            for subject in self.declared_subjects:
-                try:
-                    await js.find_stream_name_by_subject(subject)
-                except (LookupError, TypeError) as e:  # That's what nats.py throws...
-                    return Status.new_fail(msg=f'Stream for {subject} not found')
-        except Exception as e:
-            return Status.new_fail(msg=f'Error getting streams info: {e}')
-        return Status.new_ok(msg='All declared subjects have streams')

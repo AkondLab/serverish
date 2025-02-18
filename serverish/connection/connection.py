@@ -5,7 +5,6 @@ import re
 import socket
 from typing import Iterable
 
-import param
 from serverish.base.hasstatuses import HasStatuses
 from serverish.base.status import Status
 
@@ -14,22 +13,21 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 class Connection(HasStatuses):
     """Watches IP connection and reports status"""
-    host = param.List(default=['localhost'], item_type=str)
-    port = param.List(default=[80], item_type=int)
 
     regexp_ip: str = r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$'
     r_ip: re.Pattern = re.compile(regexp_ip)
 
-    def __init__(self, host: str|Iterable[str], port: int|Iterable[int], **kwargs):
+    def __init__(self, host: str|Iterable[str], port: int|Iterable[int]|None, **kwargs):
         """Initializes connection watcher
 
         Args:
-            host (str): Hostname or IP address, may be multiple
+            host (str): Hostname or IP address or host:port connection string(s), may be multiple
             port (int): Port number, may be multiple
 
         If both host and port are iterable, they must have same length.
         If host is iterable and port is not, port is repeated for each host.
         If port is iterable and host is not, host is repeated for each port.
+        If port is None, port is expected to be in host string(s), separated by colon.
         """
         if isinstance(host, str):
             host = [host]
@@ -37,6 +35,13 @@ class Connection(HasStatuses):
             host = list(host)
         if isinstance(port, int):
             port = [port]
+        elif port is None:
+            p, h = zip(*[h.split(':') for h in host])
+            host = list(h)
+            try:
+                port = [int(p) for p in p]
+            except ValueError:
+                raise ValueError(f'Port must be specified and be integer, got {p}')
         else:
             port = list(port)
         if len(host) == 1 and len(port) > 1:
@@ -46,6 +51,9 @@ class Connection(HasStatuses):
         if len(host) != len(port):
             raise ValueError(f'hosts and ports must have same length, got {len(host)} and {len(port)}')
 
+
+        self.host: list[str] = host
+        self.port: list[int] = port
         super().__init__(host=host, port=port, **kwargs)
         self.set_check_methods(ping=self.diagnose_ping, dns=self.diagnose_dns)
 
@@ -115,7 +123,7 @@ class Connection(HasStatuses):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE)
             _stdout, _stderr = await proc.communicate()
-            return (host, proc.returncode)
+            return host, proc.returncode
 
         if len(self.host) == 0:
             return Status.new_na(msg='No hosts to ping')

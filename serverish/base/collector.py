@@ -1,6 +1,6 @@
+from __future__ import annotations
 import logging
 
-import param
 
 from serverish.base.manageable import Manageable
 
@@ -9,8 +9,11 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 class Collector(Manageable):
     """Has manageable children"""
     # children: list[Manageable] = None
-    children_by_name: dict[str, Manageable] = param.Dict(default=dict(), allow_None=False, doc='Children by name')
-    children_names: dict[Manageable, str] = param.Dict(default=dict(), allow_None=False, doc='Names by child')
+
+    def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
+        super().__init__(name, parent, **kwargs)
+        self.children_by_name = {}
+        self.children_names = {}
 
     def ensure_parenting(self, child: Manageable):
         try:

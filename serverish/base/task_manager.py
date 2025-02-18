@@ -1,7 +1,6 @@
 import asyncio
 import logging
 
-import param
 
 from serverish.base import Status
 from serverish.base.asyncio_util_functions import wait_for_psce
@@ -16,8 +15,7 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 
 class Task(HasStatuses):
-    task = param.ClassSelector(default=None, class_=asyncio.Task, allow_None=True, doc='Asyncio task')
-
+    """Asyncio task with status tracking"""
     def __init__(self, name, coro, parent: Collector = None, **kwargs) -> None:
         try:
             if not kwargs.pop('i_know_what_i_am_doing'):
@@ -28,6 +26,7 @@ class Task(HasStatuses):
 
 
         self.coro = coro
+        self.task: asyncio.Task = None
         super().__init__(name=name, parent=parent, **kwargs)
         # self.set_check_methods(ping=self.diagnose_ping, dns=self.diagnose_dns)
 

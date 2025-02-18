@@ -5,7 +5,6 @@ import asyncio
 from asyncio import Event
 
 import nats.errors
-import param
 from nats.aio.subscription import Subscription
 from nats.js import JetStreamContext
 from nats.js.api import DeliverPolicy, ConsumerConfig
@@ -47,7 +46,7 @@ class MsgSingleReader(MsgReader):
 
 def get_singlereader(subject: str,
                            deliver_policy='last',
-                           **kwargs) -> 'MsgSingleReader':
+                           **kwargs) -> MsgSingleReader:
     """Returns a single value reader for a given subject
 
     Args:
