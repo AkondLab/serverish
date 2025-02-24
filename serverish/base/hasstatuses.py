@@ -16,7 +16,7 @@ class HasStatuses(Manageable):
 
     @staticmethod
     def diagnose_dummy_ok() -> Status:
-        """Dummy diagnosis, returns StatusEnum.ok"""
+        """Dummy diagnostics, returns StatusEnum.ok"""
         return Status.new_ok(msg='Dummy OK')
 
     def __init__(self, name: str | None = None, parent: Collector | None = None, **kwargs) -> None:

@@ -1,0 +1,30 @@
+# This is default settings for server providing orchestration for single or multiple services
+
+# Those settings are overridden by following files
+#            /usr/local/etc/<service_name>/settings.yaml
+#            ~/.settings/<service_name>/settings.yaml
+
+nats:
+  host: localhost
+  port: 4222
+  subjects:
+    global_config: 'site.config'
+    svc_discovery: 'svc.reg.{domain}.{name}.{instance}'  # svc.reg.zb08.ofp.downloader, svc.reg.site.clock.main
+    svc_status: 'svc.status.{domain}.{name}.{instance}'
+    svc_rpc: 'site.rpc.{domain}.{name}.{instance}'
+    svc_journal: "site.journal.{domain}.{name}.{instance}"
+
+
+services:
+  site: # domain
+    simple_service: # svc_name
+      instances:  # if omitted, there is single unnamed instance
+        - main
+        - backup
+      class:
+        name: 'SimpleService'
+        module: './examples/simple_service.py'
+      kwargs:
+        a: 1
+        b: 2
+      enabled: true  # inactive will not be loaded

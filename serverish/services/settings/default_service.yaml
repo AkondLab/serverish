@@ -1,0 +1,7 @@
+# This is default settings for specific service
+
+# Those settings are overridden by following files
+#            /usr/local/etc/<service_name>/settings.yaml
+#            ~/.settings/<service_name>/settings.yaml
+
+a: b

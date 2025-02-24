@@ -162,7 +162,7 @@ class MsgReader(MsgDriver):
         # else:
         #     log.debug(f"Creating push subscription for {self}")
         #     self.push_subscription = await js.subscribe(self.subject,
-        #                                                 config=consumer_conf)
+        #                                                 settings=consumer_conf)
 
         # self._emptied.set()
         await super().open()

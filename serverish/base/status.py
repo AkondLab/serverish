@@ -130,3 +130,9 @@ class Status:
 
     def __bool__(self):
         return self.status == StatusEnum.ok
+
+    def to_dict(self):
+        return {
+            'status': self.status.name,
+            'msg': self.msg,
+        }
