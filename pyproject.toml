@@ -9,27 +9,47 @@ include = ["serverish/schema/*"]
 
 [tool.poetry.dependencies]
 python = "^3.8"
-aiodns = {version="^3.2.0", optional=true}
-nats-py = { version = "^2.7.2", optional= true}
 jsonschema = "^4.20.0"
-pydantic = "^2.10.6"
-dynaconf = "^3.2.10"
-fire = "^0.7.0"
+nats-py = { version = "^2.7.2", optional = true }
+aiodns = { version = "^3.2.0", optional = true }
+pydantic = { version = "^2.10.6", optional = true }
+dynaconf = { version = "^3.2.10", optional = true }
+fire = { version = "^0.7.0", optional = true }
+fastapi = { version = "^0.115.8", optional = true }
+typer-slim = "^0.15.1"
 
 [tool.poetry.extras]
 messenger = ["nats-py"]
 dns = ["aiodns"]
+server = ["fastapi", "fire", "nats-py", "typer", "dynaconf"]
+services = ["dynaconf", "nats-py"]
+all = [
+    "aiodns",
+    "nats-py",
+    "pydantic",
+    "dynaconf",
+    "fire",
+    "fastapi",
+    "typer",
+]
 
+[tool.poetry.scripts]
+sish = "serverish.services.cli:main"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^7.4.0"
-pytest-asyncio = "^0.21.0"
-nats-py = "^2.6.0"
-jupyter = "*"
-rich = "^13.5.2"
+pytest = "^7.4.3"
+pytest-asyncio = "^0.23.5"
+pytest-cov = "^4.1.0"
+nats-py = "^2.7.2"
 aiodns = "^3.1.1"
+pydantic = "^2.10.6"
+dynaconf = "^3.2.10"
+fire = "^0.7.0"
+fastapi = "^0.115.8"
+typer-slim = "^0.15.1"
+
 
 
 [build-system]
 requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+backend = "poetry.core.masonry.api"
