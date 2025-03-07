@@ -108,7 +108,11 @@ class MsgReader(MsgDriver):
                     self._emptied.set()
                 except nats.js.errors.NotFoundError:
                     log.warning(f"Consumer has gone, ({datetime.now() - read_start_time}s of pulling) trying to recreate it on {self}")
-                    await self._reopen()
+                    try:
+                        await self._reopen()
+                        log.info('Consumer recreated {self}')
+                    except Exception as e:
+                        log.error(f"Error recreating consumer: {e}, but we will keep trying {self}")
                 except nats.errors.TimeoutError:
                     log.warning(f"Consumer (nats) timeout), but we will keep trying {self}")
 
