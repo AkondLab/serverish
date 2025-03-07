@@ -110,7 +110,7 @@ class MsgReader(MsgDriver):
                     log.warning(f"Consumer has gone, ({datetime.now() - read_start_time}s of pulling) trying to recreate it on {self}")
                     try:
                         await self._reopen()
-                        log.info('Consumer recreated {self}')
+                        log.info(f'Consumer recreated {self}')
                     except Exception as e:
                         log.error(f"Error recreating consumer: {e}, but we will keep trying {self}")
                 except nats.errors.TimeoutError:
