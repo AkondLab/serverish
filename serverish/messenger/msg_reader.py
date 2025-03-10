@@ -70,10 +70,12 @@ class MsgReader(MsgDriver):
         self._reconnect_needed: Event = Event()
         self.pull_batch = deque()
         self.id_cache = FifoSet(128)
+        self._expect_beeing_open = False
         super().__init__(subject=subject, parent=parent,
                          deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg,
                          **kwargs)
         log.debug(f"Created {self}")
+
 
     def __aiter__(self):
         log.debug(f"Entering iteration {self}")
@@ -91,7 +93,24 @@ class MsgReader(MsgDriver):
 
     async def read_next(self) -> tuple[dict, dict]:
         if not self.is_open:
-            await self.open()
+            if self._expect_beeing_open:
+                log.warning(f'The reader is not open, but once it has been, trying to reopen {self}')
+            while not self.is_open:
+                try:
+                    await self.open()
+                    if self.is_open:
+                        self._expect_beeing_open = True
+                        break
+                    else:
+                        log.warning(f"Opened, but still close, we will keep trying {self}")
+                except Exception as e:
+                    if not self._expect_beeing_open:  # havnt been open, we can raise exception
+                        log.error(f"Error opening reader, finishing sub loop {self}: {e}")
+                        raise MessengerReaderStopped
+                    else:
+                        log.warning(f"Error opening reader, but we will keep trying {self}: {e}")
+                await asyncio.sleep(1)
+
 
 
         n = 0
@@ -107,14 +126,16 @@ class MsgReader(MsgDriver):
                     ci = await self.pull_subscription.consumer_info()
                     self._emptied.set()
                 except nats.js.errors.NotFoundError:
-                    log.warning(f"Consumer has gone, ({datetime.now() - read_start_time}s of pulling) trying to recreate it on {self}")
+                    log.warning(f"Consumer has gone, ({datetime.now() - read_start_time:.1f} s of pulling) trying to recreate it on {self}")
                     try:
                         await self._reopen()
                         log.info(f'Consumer recreated {self}')
                     except Exception as e:
-                        log.error(f"Error recreating consumer: {e}, but we will keep trying {self}")
+                        log.warning(f"Error recreating consumer: {e}, but we will keep trying {self}")
                 except nats.errors.TimeoutError:
                     log.warning(f"Consumer (nats) timeout), but we will keep trying {self}")
+                except Exception as e:
+                    log.warning(f"Error receiving consumer info, but we will keep trying {self}, {e}")
 
             try:
                 timeout = min(0.2 + n/5, 5)  # start fast and slow down to 5s
@@ -135,15 +156,27 @@ class MsgReader(MsgDriver):
                     assert self.on_connection_close == 'WAIT'
                     log.warning(f'Connection closed, waiting for reconnect on {self}')
                     await asyncio.sleep(1.0)
+            except Exception as e:
+                log.error(f"Error during fetch: {self} {e}")
+                await asyncio.sleep(1.0)
+
             n += 1
 
-        self._emptied.clear()
-        bmsg = self.pull_batch.popleft()
-        await bmsg.ack()
-        data, meta = self.messenger.unpack_nats_msg(bmsg)
-        self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
-        meta['receive_mode'] = 'pull'
-        self.last_seq = meta['nats']['seq']
+            if len(self.pull_batch) > 0:
+                try:
+                    bmsg = self.pull_batch.popleft()
+                    await bmsg.ack()
+                    data, meta = self.messenger.unpack_nats_msg(bmsg)
+                    self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
+                    meta['receive_mode'] = 'pull'
+                    self.last_seq = meta['nats']['seq']
+                    self._emptied.clear()
+                    break
+                except Exception as e:
+                    log.error(f"Error processing message: {self} {e}")
+                    self.pull_batch = deque()
+                    await asyncio.sleep(1.0)
+
 
         logging.debug(f'Returning message seq={self.last_seq}: {data}')
 
