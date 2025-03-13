@@ -74,7 +74,7 @@ async def test_messenger_pub3_then_sub():
         await publisher_task(pub, 2)
 
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(3)
         await publish_final(pub)
 
         await t
@@ -147,6 +147,8 @@ async def test_messenger_pub_then_sub():
         await subsciber_task(sub)
         await pub.close()
         await sub.close()
+
+
 
 
 @pytest.mark.asyncio  # This tells pytest this test is async

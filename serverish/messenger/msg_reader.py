@@ -5,6 +5,9 @@ import asyncio
 from asyncio import Event
 from collections import deque
 from datetime import datetime
+import time
+from dataclasses import dataclass, field
+import functools
 
 import nats.errors
 import param
@@ -42,8 +45,8 @@ class MsgReader(MsgDriver):
                               doc="Additional JetStream consumer configuration")
 
     # behaviour config
-    on_connection_close = param.ObjectSelector(default="WAIT", objects=["RAISE", "FINISH", "WAIT"],
-                                               doc="On disconnection: "
+    error_behavior = param.ObjectSelector(default="WAIT", objects=["RAISE", "FINISH", "WAIT"],
+                                          doc="On disconnection: "
                                                    "RAISE - reraise exception, "
                                                    "FINISH - silently finish iteration, "
                                                    "WAIT - wait for connection to be re-established")
@@ -59,8 +62,13 @@ class MsgReader(MsgDriver):
                  **kwargs) -> None:
         if parent is None:
             parent = Messenger()
-        if consumer_cfg is None:
-            consumer_cfg = {}
+        consumer_cfg_defaults = {
+            'inactive_threshold': 60
+        }
+        if consumer_cfg is not None:
+            consumer_cfg_defaults.update(consumer_cfg)
+        self.batch = 100
+        self.messages = deque()
         self.pull_subscription: JetStreamContext.PullSubscription | None = None
         self.push_subscription: JetStreamContext.PushSubscription | None = None
         self.last_seq: int | None = None
@@ -72,7 +80,7 @@ class MsgReader(MsgDriver):
         self.id_cache = FifoSet(128)
         self._expect_beeing_open = False
         super().__init__(subject=subject, parent=parent,
-                         deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg,
+                         deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg_defaults,
                          **kwargs)
         log.debug(f"Created {self}")
 
@@ -90,215 +98,228 @@ class MsgReader(MsgDriver):
         finally:
             pass
 
-
     async def read_next(self) -> tuple[dict, dict]:
-        if not self.is_open:
-            if self._expect_beeing_open:
-                log.warning(f'The reader is not open, but once it has been, trying to reopen {self}')
-            while not self.is_open:
-                try:
-                    await self.open()
-                    if self.is_open:
-                        self._expect_beeing_open = True
-                        break
-                    else:
-                        log.warning(f"Opened, but still close, we will keep trying {self}")
-                except Exception as e:
-                    if not self._expect_beeing_open:  # havnt been open, we can raise exception
-                        log.error(f"Error opening reader, finishing sub loop {self}: {e}")
-                        raise MessengerReaderStopped
-                    else:
-                        log.warning(f"Error opening reader, but we will keep trying {self}: {e}")
-                await asyncio.sleep(1)
+        """By default, once you enter method will not return or raise exception until have some data for you
+
+        Only stop signal and Cancel exception finish the iteration.
+        One may change this behavior by setting `on_connection_close` to 'RAISE' or 'FINISH'.
+        This will cause raising exception or finishing iteration on seruios erros.
+        """
+
+        # The reader loop's state and methods
+        @dataclass
+        class _ReadNextState:
+            class _LoopException(Exception):
+                def __init__(self, task: str, *args, **kwargs):
+                    self.task: str = task
+                    super().__init__(*args, **kwargs)
+            class ContinueException(_LoopException): pass
+            class ErrorException(_LoopException):
+                def __init__(self, task: str, e: Exception, *args, **kwargs):
+                    self.error: Exception = e
+                    super().__init__(task, *args, **kwargs)
+            class ReturnException(_LoopException):
+                def __init__(self, task: str, data: dict, meta: dict, *args, **kwargs):
+                    self.data: dict = data
+                    self.meta: dict = meta
+                    super().__init__(task, *args, **kwargs)
+            class EndIterationException(_LoopException): pass
 
 
+            reader: MsgReader
+            n: int = 0
+            log: List[str] = field(default_factory=list)
+            start_time: datetime = field(default_factory=datetime.now)
+            error: Exception = None
 
-        n = 0
-        read_start_time = datetime.now()
-        while len(self.pull_batch) == 0:
-            if self._stop.is_set():
-                await self.close()
-                raise MessengerReaderStopped
-            if n > 2:
-                # check consumer, maybe ephemeral consumer is gone
-                # if is OK, signal that we were empty (n > 2 means that we tried to pull messages for a while
-                try:
-                    ci = await self.pull_subscription.consumer_info()
-                    self._emptied.set()
-                except nats.js.errors.NotFoundError:
-                    log.warning(f"Consumer has gone, ({datetime.now() - read_start_time:.1f} s of pulling) trying to recreate it on {self}")
+            def async_shield(func):
+                @functools.wraps(func)
+                async def wrapper(*args, **kwargs):
                     try:
-                        await self._reopen()
-                        log.info(f'Consumer recreated {self}')
+                        result = await func(*args, **kwargs)
+                    except _ReadNextState._LoopException:
+                        raise
                     except Exception as e:
-                        log.warning(f"Error recreating consumer: {e}, but we will keep trying {self}")
-                except nats.errors.TimeoutError:
-                    log.warning(f"Consumer (nats) timeout), but we will keep trying {self}")
-                except Exception as e:
-                    log.warning(f"Error receiving consumer info, but we will keep trying {self}, {e}")
+                        raise _ReadNextState.ErrorException(func.__name__, e)
+                    return result
+                return wrapper
+
+            @async_shield
+            async def pop_msg(self) -> None:
+                if len(self.reader.messages) > 0:
+                    bmsg = self.reader.messages.popleft()
+                    try: # nonessential
+                        await bmsg.ack()
+                    except Exception as e:
+                        log.warning(self.fmt(f"Error acking message: {e}"))
+                    data, meta = self.reader.messenger.unpack_nats_msg(bmsg)
+                    meta['receive_mode'] = 'pull'
+                    try: # nonessential
+                        self.reader.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.reader.subject}")
+                        self.reader.last_seq = meta['nats']['seq']
+                        if len(self.reader.messages) == 0:
+                            self.reader._emptied.set()
+                    except Exception as e:
+                        log.warning(self.fmt(f"Error unpacking message: {e}"))
+                    raise  self.ReturnException('pop', data, meta)
+            @async_shield
+            async def ensure_open(self) -> None:
+                if not self.reader.is_open:
+                    if self.reader._expect_beeing_open:
+                        log.warning(self.fmt("The reader is not open, but once it has been, trying to reopen"))
+                    await self.reader.open()
+                    if self.reader.is_open:
+                        self.reader._expect_beeing_open = True
+                        raise self.ContinueException('open')
+                    else:
+                        raise Exception('Opened, but still close')
+            @async_shield
+            async def ensure_not_stopped(self) -> None:
+                if self.reader._stop.is_set():
+                    await self.reader.close()
+                    raise self.EndIterationException('stop')
+            @async_shield
+            async def ensure_consumer(self) -> None:
+                if self.error is not None:
+                    try:
+                        ci = await self.reader.pull_subscription.consumer_info()
+                        print(ci)
+                    except nats.js.errors.NotFoundError:
+                        log.warning(self.fmt("Consumer has gone, trying to recreate it"))
+                        await self.reader._reopen()
+                        log.info(self.fmt(f"Consumer re-opened"))
+                        raise self.ContinueException('reopen')
+            @async_shield
+            async def read_batch(self) -> None:
+                if len(self.reader.messages) == 0:
+                    timeout = min(0.1 + self.n/10.0, 5.0)
+                    # batch = 1 if self.error is not None else 100 # recover slowly
+                    log.debug(self.fmt(f"Pulling {self.reader.batch} messages with timeout {timeout}s"))
+                    new_msgs = await self.reader.fetch_available(batch=self.reader.batch, timeout=timeout)
+                    log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
+                    self.reader.messages.extend(new_msgs)
+                    raise self.ContinueException('read')
+
+            def fmt(self, msg: str) -> str:
+                return f"({self.n}){self.reader} {msg} elapsed: {(datetime.now() - self.start_time).total_seconds():.1f}s hist: {':'.join(self.log)}"
+            def logput(self, msg: str) -> None:
+                if len(self.log) > 0 and self.log[-1] == msg:
+                    return
+                if len(self.log) > 15:
+                    self.log = self.log[-15:]
+                    self.log[0] = '...'
+                self.log.append(msg)
+
+        st = _ReadNextState(self)
+        # The loop which tries hard to get some data
+        while True:
+            try:
+                # 0. Do we have some data to return already?
+                await st.pop_msg()
+                # 1. Check if iteration have been stopped externally
+                await st.ensure_not_stopped()
+                # 2. Is it at least open?
+                await st.ensure_open()
+                # 3. Check consumer, maybe ephemeral consumer is gone
+                await st.ensure_consumer()
+                # 4. Pull batch of  messages
+                await st.read_batch()
+            except st.ContinueException as e:  # one of the method did something
+                st.logput(f'{e.task}-ok')
+                log.debug(st.fmt(f"continue after: {e.task}"))
+            except st.ReturnException as e:  # we have data to return
+                st.logput(f'{e.task}-ret')
+                if st.error is not None:
+                    log.info(st.fmt(f"recovered"))
+                    st.error = None
+                log.debug(st.fmt(f"data returned"))
+                return e.data, e.meta
+            except st.EndIterationException as e:
+                st.logput(f'{e.task}-fin')
+                log.info(st.fmt(f"iteration stoped on request"))
+                raise MessengerReaderStopped
+            except st.ErrorException as e:  # some error
+                st.logput(f'{e.task}-err')
+                st.error = e.error
+                match self.error_behavior:
+                    case 'RAISE':
+                        log.error(st.fmt(f"raising read_next error:  {e.error}"))
+                        raise e.error
+                    case 'FINISH':
+                        log.error(st.fmt(f"finishing iteration on error: {e.error}"))
+                        raise MessengerReaderStopped
+                    case 'WAIT':
+                        wait_time = min(0.2 + st.n/5.0, 15.0)
+                        log.warning(st.fmt(f"read_next error, (retry in {wait_time:.1f}s): {e.error}"))
+                        await asyncio.sleep(wait_time)
+                    case _:  # should not be reached
+                        log.error(st.fmt(f"Invalid on_connection_close value {self.error_behavior}"))
+                        exit(-1) # this is not i/o error but programming error
+            except Exception as e:# should never happen
+                log.error(st.fmt(f"unhandled exception {e}"))
+                exit(-1) # this is not i/o error but programming error
+            st.n += 1
+        # end while
+
+
+    async def fetch_available(self, batch=10, timeout = 0.1):
+        """Fetch only immediately available messages without blocking
+
+        Path on lack of functionality of JetStreamContext.PullSubscription.fetch
+        By default uses only very short timeout to account for network latency
+        """
+        import json
+
+        pull_subscription = self.pull_subscription
+        # Get from internal queue first
+        msgs = []
+        needed = batch
+        queue = pull_subscription._sub._pending_queue
+
+        # First get messages from the internal queue
+        while not queue.empty() and needed > 0:
+            try:
+                msg = queue.get_nowait()
+                pull_subscription._sub._pending_size -= len(msg.data)
+                status = JetStreamContext.is_status_msg(msg)
+                if not status:  # Skip status messages
+                    msgs.append(msg)
+                    needed -= 1
+            except Exception:
+                pass
+
+        # If we already have enough messages, return early
+        if needed == 0:
+            return msgs
+
+        # Make one no_wait request to get immediately available messages
+        next_req = {"batch": needed, "no_wait": True}
+        await pull_subscription._nc.publish(
+            pull_subscription._nms,
+            json.dumps(next_req).encode(),
+            pull_subscription._deliver,
+        )
+
+        start_time = time.monotonic()
+
+        # Process the response with a very short timeout
+        while needed > 0:
+            deadline = timeout - (time.monotonic() - start_time)
+            if deadline <= 0:
+                break
 
             try:
-                timeout = min(0.2 + n/5, 5)  # start fast and slow down to 5s
-                batch = 1 if n > 1 else 100
-                log.debug(f"Pulling {batch} in {timeout}s from {self}")
-                self.pull_batch = deque(await self.pull_subscription.fetch(batch=batch, timeout=timeout))
-                log.debug(f"Pulled {len(self.pull_batch)} messages from {self}")
-            except nats.errors.TimeoutError:
-                pass
-            except nats.errors.ConnectionClosedError:
-                if self.on_connection_close == 'RAISE':
-                    log.warning(f'Connection closed, raising exception on {self}')
-                    raise
-                elif self.on_connection_close == 'FINISH':
-                    log.warning(f'Connection closed, finishing iteration on {self}')
-                    self._stop.set()
-                else:
-                    assert self.on_connection_close == 'WAIT'
-                    log.warning(f'Connection closed, waiting for reconnect on {self}')
-                    await asyncio.sleep(1.0)
-            except Exception as e:
-                log.error(f"Error during fetch: {self} {e}")
-                await asyncio.sleep(1.0)
-
-            n += 1
-
-            if len(self.pull_batch) > 0:
-                try:
-                    bmsg = self.pull_batch.popleft()
-                    await bmsg.ack()
-                    data, meta = self.messenger.unpack_nats_msg(bmsg)
-                    self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
-                    meta['receive_mode'] = 'pull'
-                    self.last_seq = meta['nats']['seq']
-                    self._emptied.clear()
+                msg = await pull_subscription._sub.next_msg(timeout=deadline)
+                status = JetStreamContext.is_status_msg(msg)
+                if not status:
+                    msgs.append(msg)
+                    needed -= 1
+                elif status == "404":  # NO_MESSAGES
                     break
-                except Exception as e:
-                    log.error(f"Error processing message: {self} {e}")
-                    self.pull_batch = deque()
-                    await asyncio.sleep(1.0)
+            except asyncio.TimeoutError:
+                break
 
-
-        logging.debug(f'Returning message seq={self.last_seq}: {data}')
-
-        return data, meta
-
-
-    # async def read_next_(self) -> tuple[dict, dict]:
-    #     if not self.is_open:
-    #         await self.open()
-    #
-    #
-    #     keep_pulling = True
-    #     transform_to_pull = False
-    #     while keep_pulling:
-    #         if transform_to_pull:
-    #             try:
-    #                 await self._transform_to_pull_sub()
-    #                 keep_pulling = False
-    #                 transform_to_pull = False
-    #             except (nats.errors.ConnectionClosedError, nats.errors.TimeoutError):
-    #                 await asyncio.sleep(1)
-    #                 continue
-    #         else:
-    #             keep_pulling = False
-    #
-    #         bmsg = None
-    #         data, meta = {}, {}
-    #         # First - pull subscription
-    #         if not self._emptied.is_set():
-    #             # self.pull_batch = deque()
-    #             while True:
-    #                 if self._stop.is_set():
-    #                     await self.close()
-    #                     raise MessengerReaderStopped
-    #                 try:
-    #                     if len(self.pull_batch) == 0:
-    #                         log.debug(f"Pulling from {self}")
-    #                         self.pull_batch = deque(await self.pull_subscription.fetch(batch=100, timeout=10.0))
-    #                         log.debug(f"Pulled {len(self.pull_batch)} messages from {self}")
-    #                     bmsg = self.pull_batch.popleft()
-    #                     await bmsg.ack()
-    #                     data, meta = self.messenger.unpack_nats_msg(bmsg)
-    #                     self.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.subject}")
-    #                     meta['receive_mode'] = 'pull'
-    #                 except nats.errors.TimeoutError:
-    #                     if self.push_subscription is None:
-    #                         await self._transform_to_push_sub()
-    #                         # we are creating push subscription but still pulling messages if possible to do not miss any message
-    #                         continue
-    #                     else:
-    #                         # push is ready and pull timeouts, we can switch to push
-    #                         self._emptied.set()
-    #                 except nats.errors.ConnectionClosedError:
-    #                     if self.on_connection_close == 'RAISE':
-    #                         log.warning(f'Connection closed, raising exception on {self}')
-    #                         raise
-    #                     elif self.on_connection_close == 'FINISH':
-    #                         log.warning(f'Connection closed, finishing iteration on {self}')
-    #                         self._stop.set()
-    #                     else:
-    #                         assert self.on_connection_close == 'WAIT'
-    #                         log.warning(f'Connection closed, waiting for reconnect on {self}')
-    #                         await asyncio.sleep(1.0)
-    #                         continue
-    #                 break
-    #
-    #         # Second - push subscription
-    #         if bmsg is None and self._emptied.is_set():
-    #             log.debug(f"Waiting for pushed to {self}")
-    #             while True:
-    #                 if self._stop.is_set():
-    #                     await self.close()
-    #                     raise MessengerReaderStopped
-    #                 try:
-    #                     if self._reconnect_needed.is_set():
-    #                         self._reconnect_needed.clear()
-    #                         raise _ReconnectNeededError
-    #                     bmsg = await self.push_subscription.next_msg()
-    #                     await bmsg.ack()
-    #                     data, meta = self.messenger.unpack_nats_msg(bmsg)
-    #                     self.messenger.log_msg_trace(data, meta, f"SUB PUSH iteration from {self.subject}")
-    #                     meta['receive_mode'] = 'push'
-    #                     if f'{meta["id"]}{meta["ts"]}' in self.id_cache:
-    #                         log.debug(f"Skipping duplicated message from {self.subject}")
-    #                         bmsg = data = meta = None
-    #                         continue
-    #                     break
-    #                 except nats.errors.TimeoutError:
-    #                     pass  # keep iterating
-    #                 except (nats.errors.ConnectionClosedError, _ReconnectNeededError):
-    #                     if self.on_connection_close == 'RAISE':
-    #                         log.warning(f'Connection closed, raising exception on {self}')
-    #                         raise
-    #                     elif self.on_connection_close == 'FINISH':
-    #                         log.warning(f'Connection closed, finishing iteration on {self}')
-    #                         self._stop.set()
-    #                     else:
-    #                         assert self.on_connection_close == 'WAIT'
-    #                         log.warning(f'Connection closed, waiting for reconnect on {self}')
-    #                         await asyncio.sleep(1.0)
-    #                         transform_to_pull = True
-    #                         keep_pulling = True
-    #                         break
-    #
-    #                 except Exception as e:
-    #                     log.error(f"During interation on {self}, push subscription.next_msg raised {e}")
-    #                     await self.close()
-    #                     raise e
-    #
-    #     if bmsg is None:
-    #         log.debug(f"No message to return, closing {self}")
-    #         await self.close()
-    #         raise MessengerReaderStopped
-    #     cachedid = f'{meta["id"]}{meta["ts"]}'
-    #     try:
-    #         self.id_cache.add(cachedid)
-    #     except Exception as e:
-    #         log.error(f"Error adding id: {cachedid} of msg: data={data} meta={meta} to id_cache: {e}")
-    #     log.debug(f"Returning message {self}")
-    #     self.last_seq = meta['nats']['seq']
-    #     self._msg_processed.set()
-    #     return data, meta
+        return msgs
 
     async def open(self) -> None:
         if self.pull_subscription is not None:
@@ -329,9 +350,12 @@ class MsgReader(MsgDriver):
     async def _create_pull_subscribtion(self, consumer_conf: ConsumerConfig):
         # Durable consumer is probably not needed (at least problematic)
         # consumer_conf.durable_name = self.name if consumer_conf.durable_name is None else consumer_conf.durable_name
-        return await self.connection.js.pull_subscribe(self.subject,
+        ret = await self.connection.js.pull_subscribe(self.subject,
                                                        durable=consumer_conf.durable_name,
                                                        config=consumer_conf)
+        ci = await ret.consumer_info()
+        return ret
+
     async def _reopen(self) -> None:
         try:
             await self.pull_subscription.unsubscribe()
