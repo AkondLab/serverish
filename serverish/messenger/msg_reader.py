@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 import time
 from dataclasses import dataclass, field
 import functools
+from uuid import uuid4
+
 
 import nats.errors
 import param
@@ -201,11 +203,27 @@ class MsgReader(MsgDriver):
             @async_shield
             async def read_batch(self) -> None:
                 if len(self.reader.messages) == 0:
-                    timeout = min(0.1 + self.n/10.0, 5.0)
+                    timeout = 100.0 # min(0.1 + self.n/10.0, 5.0)
                     # batch = 1 if self.error is not None else 100 # recover slowly
-                    log.debug(self.fmt(f"Pulling {self.reader.batch} messages with timeout {timeout}s"))
+                    log.info(self.fmt(f"Pulling {self.reader.batch} messages with timeout {timeout}s"))
                     new_msgs = await self.reader.fetch_available(batch=self.reader.batch, timeout=timeout)
-                    log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
+                    log.info(self.fmt(f"Pulled {len(new_msgs)} messages"))
+
+                    # If no messages were available immediately, switch to blocking mode
+                    # to wait for at least one message more efficiently
+                    if len(new_msgs) == 0:
+                        log.info(self.fmt(f"No messages available immediately, waiting for at least one message with timeout {timeout:0.1f}s"))
+
+                        # Use the regular fetch operation from nats (which blocks)
+                        try:
+                            new_msgs = await self.reader.pull_subscription.fetch(1, timeout=timeout)
+                            log.info(self.fmt(f"Received {len(new_msgs)} message while blocking waiting"))
+                        except asyncio.TimeoutError:
+                            log.info(self.fmt(f"No meesge before timeout"))
+                        except Exception as e:
+                            log.warning(self.fmt(f"Error waiting for messages: {e}"))
+                    # fi : no messages available immediately
+
                     self.reader.messages.extend(new_msgs)
 
                     raise self.ContinueException('read')
@@ -273,7 +291,7 @@ class MsgReader(MsgDriver):
 
 
     async def fetch_available(self, batch=10, timeout = 0.1):
-        """Fetch only immediately available messages without blocking
+        """[NATS fix] Fetch only immediately available messages without blocking
 
         Path on lack of functionality of JetStreamContext.PullSubscription.fetch
         By default uses only very short timeout to account for network latency
@@ -319,7 +337,7 @@ class MsgReader(MsgDriver):
                 break
 
             try:
-                msg = await pull_subscription._sub.next_msg(timeout=deadline)
+                msg = await self.next_msg(timeout=0.0) # nonblocking here
                 status = JetStreamContext.is_status_msg(msg)
                 if not status:
                     msgs.append(msg)
@@ -328,8 +346,63 @@ class MsgReader(MsgDriver):
                     break
             except asyncio.TimeoutError:
                 break
+            except asyncio.QueueEmpty:
+                log.info(f"{self} Queue is empty")
+                break
 
         return msgs
+
+    async def next_msg(self, timeout: Optional[float] = None) -> Msg:
+        """ [NATS fix] Fetch the next message from the subscription
+        :params timeout: Time in seconds to wait for next message before timing out.
+                        supports 0 for non-blocking and None for blocking indefinitely.
+        :raises nats.errors.TimeoutError:
+
+        next_msg can be used to retrieve the next message from a stream of messages using
+        await syntax, this only works when not passing a callback on `subscribe`::
+
+            sub = await nc.subscribe('hello')
+            msg = await sub.next_msg(timeout=1)
+
+        """
+        ps = self.pull_subscription._sub
+        if ps._conn.is_closed:
+            raise errors.ConnectionClosedError
+
+        if ps._cb:
+            raise errors.Error(
+                'nats: next_msg cannot be used in async subscriptions'
+            )
+
+        task_name = str(uuid4())
+        try:
+            if timeout == 0.0:
+                future = asyncio.create_task(
+                    ps._pending_queue.get_nowait()
+                )
+            else:
+                future = asyncio.create_task(
+                    asyncio.wait_for(ps._pending_queue.get(), timeout)
+                )
+            ps._pending_next_msgs_calls[task_name] = future
+            msg = await future
+        except asyncio.TimeoutError:
+            if ps._conn.is_closed:
+                raise errors.ConnectionClosedError
+            raise errors.TimeoutError
+        except asyncio.CancelledError:
+            if ps._conn.is_closed:
+                raise errors.ConnectionClosedError
+            raise
+        else:
+            ps._pending_size -= len(msg.data)
+            # For sync subscriptions we will consider a message
+            # to be done once it has been consumed by the client
+            # regardless of whether it has been processed.
+            ps._pending_queue.task_done()
+            return msg
+        finally:
+            ps._pending_next_msgs_calls.pop(task_name, None)
 
     async def open(self) -> None:
         if self.pull_subscription is not None:

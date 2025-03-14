@@ -187,6 +187,135 @@ async def test_messenger_pub_sub_pub():
         await sub.close()
     assert len(collected) == 21
 
+@pytest.mark.asyncio
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_messenger_big_pub_small_sub():
+    """Test reading a larger number of messages with a smaller batch size."""
+    subject = f'test.messenger.big_pub_small_sub'
+    total_messages = 15
+    batch_size = 10
+    collected = []
+
+    async with Messenger().context(host='localhost', port=4222) as mess:
+        # Clean up from previous runs
+        await mess.purge(subject)
+
+        # Publish 15 messages
+        pub = get_publisher(subject)
+        for i in range(total_messages):
+            await pub.publish(data={'index': i})
+            await asyncio.sleep(0.0)
+
+        # Read with smaller batch size (10)
+        sub = get_reader(subject, deliver_policy='all')
+        assert sub.batch == 100
+        sub.batch = 10
+        assert sub.batch == 10
+
+
+        # Start timing to verify it doesn't get stuck
+        start_time = datetime.datetime.now()
+
+        # Read all messages in one loop
+        async for msg, meta in sub:
+            collected.append(msg)
+            if len(collected) >= total_messages:  # Stop after reading all messages
+                break
+
+        # Check timing
+        elapsed_time = (datetime.datetime.now() - start_time).total_seconds()
+
+        await pub.close()
+        await sub.close()
+
+    # Verify we got all messages
+    assert len(collected) == total_messages
+    assert [msg['index'] for msg in collected] == list(range(total_messages))
+
+    # Verify it didn't take too long (should be quick)
+    assert elapsed_time < 1.0, f"Reading took too long: {elapsed_time} seconds"
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_messenger_immediate_message_delivery():
+    """Test that reader returns messages immediately when they appear, not waiting for batch to fill."""
+    subject = f'test.messenger.immediate_delivery.{datetime.datetime.now().timestamp()}'
+    initial_messages = 5
+    total_messages = 10
+    received_timestamps = []
+    publish_timestamps = []
+    # batch_size = 10  # Set batch size larger than initial messages
+
+    async def slow_publisher(pub):
+        """Publishes remaining messages with deliberate delay"""
+        await asyncio.sleep(0.5)  # Initial delay before publishing more
+
+        for i in range(initial_messages, total_messages):
+            time_before_publish = datetime.datetime.now()
+            await pub.publish(data={'index': i})
+            publish_timestamps.append((i, time_before_publish))
+            await asyncio.sleep(0.3)  # Slow publishing rate
+
+    async def reader_task(sub):
+        """Reads messages and records when they were received"""
+        async for msg, _ in sub:
+            received_time = datetime.datetime.now()
+            index = msg['index']
+            received_timestamps.append((index, received_time))
+
+            if len(received_timestamps) >= total_messages:
+                break
+
+    async with Messenger().context(host='localhost', port=4222) as mess:
+        # Clean up from previous runs
+        await mess.purge(subject)
+
+        # Publish initial batch of messages
+        pub = get_publisher(subject)
+        for i in range(initial_messages):
+            time_before_publish = datetime.datetime.now()
+            await pub.publish(data={'index': i})
+            publish_timestamps.append((i, time_before_publish))
+            await asyncio.sleep(0.01)
+
+        # Set up reader with custom batch size
+        sub = get_reader(subject, deliver_policy='all')
+        # sub.batch = batch_size  # Intentionally larger than initial_messages
+
+        # Start both tasks
+        reader_future = asyncio.create_task(reader_task(sub))
+        publisher_future = asyncio.create_task(slow_publisher(pub))
+
+        # Wait for both to complete
+        await asyncio.gather(reader_future, publisher_future)
+
+        await pub.close()
+        await sub.close()
+
+    # Verify all messages were received
+    assert len(received_timestamps) == total_messages
+
+    # Calculate delivery delays
+    delivery_delays = {}
+    for index, recv_time in received_timestamps:
+        # Find matching publish time
+        matching_publish = next((t for i, t in publish_timestamps if i == index), None)
+        if matching_publish:
+            delay = (recv_time - matching_publish).total_seconds()
+            delivery_delays[index] = delay
+
+    # Check delays for messages published after reader started
+    # These should be delivered quickly, not waiting for batch to fill
+    for i in range(initial_messages, total_messages):
+        assert delivery_delays[i] < 0.2, f"Message {i} delivery delay was {delivery_delays[i]:.3f}s"
+
+    # Print summary of results
+    indices = [msg[0] for msg in received_timestamps]
+    assert indices == list(range(total_messages)), f"Messages received out of order: {indices}"
+
+
 
 @pytest.mark.asyncio  # This tells pytest this test is async
 @pytest.mark.skip("Experimental long test, not for automated testing")
