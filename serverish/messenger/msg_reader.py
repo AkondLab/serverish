@@ -205,21 +205,21 @@ class MsgReader(MsgDriver):
                 if len(self.reader.messages) == 0:
                     timeout = 100.0 # min(0.1 + self.n/10.0, 5.0)
                     # batch = 1 if self.error is not None else 100 # recover slowly
-                    log.info(self.fmt(f"Pulling {self.reader.batch} messages with timeout {timeout}s"))
+                    log.debug(self.fmt(f"Pulling {self.reader.batch} messages with timeout {timeout}s"))
                     new_msgs = await self.reader.fetch_available(batch=self.reader.batch, timeout=timeout)
-                    log.info(self.fmt(f"Pulled {len(new_msgs)} messages"))
+                    log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
 
                     # If no messages were available immediately, switch to blocking mode
                     # to wait for at least one message more efficiently
                     if len(new_msgs) == 0:
-                        log.info(self.fmt(f"No messages available immediately, waiting for at least one message with timeout {timeout:0.1f}s"))
+                        log.debug(self.fmt(f"No messages available immediately, waiting for at least one message with timeout {timeout:0.1f}s"))
 
                         # Use the regular fetch operation from nats (which blocks)
                         try:
                             new_msgs = await self.reader.pull_subscription.fetch(1, timeout=timeout)
-                            log.info(self.fmt(f"Received {len(new_msgs)} message while blocking waiting"))
+                            log.debug(self.fmt(f"Received {len(new_msgs)} message while blocking waiting"))
                         except asyncio.TimeoutError:
-                            log.info(self.fmt(f"No meesge before timeout"))
+                            log.debug(self.fmt(f"No meesge before timeout"))
                         except Exception as e:
                             log.warning(self.fmt(f"Error waiting for messages: {e}"))
                     # fi : no messages available immediately
@@ -347,7 +347,7 @@ class MsgReader(MsgDriver):
             except asyncio.TimeoutError:
                 break
             except asyncio.QueueEmpty:
-                log.info(f"{self} Queue is empty")
+                log.debug(f"{self} Queue is empty")
                 break
 
         return msgs
