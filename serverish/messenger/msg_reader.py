@@ -4,7 +4,7 @@ import logging
 import asyncio
 from asyncio import Event
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 from dataclasses import dataclass, field
 import functools
@@ -153,6 +153,14 @@ class MsgReader(MsgDriver):
                     except Exception as e:
                         log.warning(self.fmt(f"Error acking message: {e}"))
                     data, meta = self.reader.messenger.unpack_nats_msg(bmsg)
+                    try:
+                        if self.reader.last_seq is not None and meta['nats']['seq'] <= self.reader.last_seq: # dupes can happen on reopen
+                            log.info(self.fmt(f"Skipping duplicated message seq={meta['nats']['seq']}, last_seq={self.reader.last_seq}"))
+                            raise self.ContinueException('pop')
+                    except self.ContinueException:
+                        raise
+                    except Exception as e:
+                        log.warning(self.fmt(f"Error checking seq: {e}"))
                     meta['receive_mode'] = 'pull'
                     try: # nonessential
                         self.reader.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.reader.subject}")
@@ -161,6 +169,7 @@ class MsgReader(MsgDriver):
                             self.reader._emptied.set()
                     except Exception as e:
                         log.warning(self.fmt(f"Error unpacking message: {e}"))
+                    # log.info(self.fmt(f"Returning message seq={meta['nats']['seq']}, last_seq={self.reader.last_seq}"))
                     raise  self.ReturnException('pop', data, meta)
             @async_shield
             async def ensure_open(self) -> None:
@@ -198,6 +207,7 @@ class MsgReader(MsgDriver):
                     new_msgs = await self.reader.fetch_available(batch=self.reader.batch, timeout=timeout)
                     log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
                     self.reader.messages.extend(new_msgs)
+
                     raise self.ContinueException('read')
 
             def fmt(self, msg: str) -> str:
@@ -364,58 +374,13 @@ class MsgReader(MsgDriver):
         consumer_conf = await self._create_consumer_cfg()
         # set policy for 'new messages' for BY_START_SEQUENCE if any message was received
         if self.last_seq is not None:
+            log.info(f"Reopening {self}, from seq={self.last_seq + 1}")
             consumer_conf.deliver_policy = DeliverPolicy.BY_START_SEQUENCE
             consumer_conf.opt_start_time = None
             consumer_conf.opt_start_seq = self.last_seq + 1
         self.pull_subscription = await self._create_pull_subscribtion(consumer_conf=consumer_conf)
 
 
-
-    async def _transform_to_pull_sub(self):
-        log.info(f"Attempt to transform {self.subject} MeassageReader mode to PULL (from seq: {self.last_seq})")
-        try:
-            await self.push_subscription.unsubscribe()
-        except (nats.errors.ConnectionClosedError, AttributeError):  # no connection, no reason to break
-            pass
-        self.push_subscription = None
-        self._emptied.clear()
-        consumer_conf = await self._create_consumer_cfg()
-        # set policy for 'new messages' for push subscription
-        if self.last_seq is not None:
-            consumer_conf.deliver_policy = DeliverPolicy.BY_START_SEQUENCE
-            consumer_conf.opt_start_time = None
-            consumer_conf.opt_start_seq = self.last_seq + 1
-        else:
-            consumer_conf.deliver_policy = DeliverPolicy.NEW
-            consumer_conf.opt_start_time = None
-            consumer_conf.opt_start_seq = None
-        self.pull_subscription = await self._create_pull_subscribtion(consumer_conf=consumer_conf)
-        log.info(f"{self}:  PULL subscription set up "
-                 f"(policy={consumer_conf.deliver_policy}, seq={consumer_conf.opt_start_seq})")
-
-
-
-    async def _transform_to_push_sub(self):
-        """After fetching existing messages, switch to push based consumer"""
-        log.info(f"Attempt to transform {self.subject} MeassageReader mode to PUSH for future messages")
-        pull = self.pull_subscription
-        if pull is None: # no transition needed or not possible
-            log.debug(f"No pull - no transform {self}")
-            return
-
-        consumer_conf = await self._create_consumer_cfg()
-        # set policy for 'new messages' for push subscription
-        consumer_conf.deliver_policy = DeliverPolicy.NEW
-        consumer_conf.opt_start_time = None
-        consumer_conf.opt_start_seq = None
-        js = self.connection.js
-
-        push: JetStreamContext.PushSubscription = await js.subscribe(
-            self.subject, config=consumer_conf
-        )
-        self.push_subscription = push
-        log.info(f"{self}:  PUSH subscription set up")
-        # self._push.set()
 
     async def _create_consumer_cfg(self) -> ConsumerConfig:
         cfg = self.consumer_cfg.copy()
@@ -427,8 +392,14 @@ class MsgReader(MsgDriver):
             if isinstance(self.opt_start_time, str):
                 cfg['opt_start_time'] = self.opt_start_time
             else:
-                # TODO: Check if it is proper format for NATS!
-                cfg['opt_start_time'] = self.opt_start_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                # Check if timezone is set, if not warn
+                if self.opt_start_time.tzinfo is None:
+                    log.warning(f"opt_start_time should have timezone information, converting to UTC: "
+                                f"{self.opt_start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')}"
+                                f"=>{self.opt_start_time.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')}"
+                                f" , use e.g. `datetime.now(tz=timezone.utc)`")
+
+                cfg['opt_start_time'] = self.opt_start_time.astimezone(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
         # Create the pull consumer configuration
         consumer_conf = ConsumerConfig(**cfg)
