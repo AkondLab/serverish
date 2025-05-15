@@ -139,6 +139,8 @@ async def test_ephemeral_consumer_with_explicit_timeout():
     await nc.close()
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
 async def test_list_all_consumers():
     nc = await nats.connect("localhost:4222")
     js = nc.jetstream()
