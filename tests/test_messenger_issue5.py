@@ -12,7 +12,9 @@ from tests.test_nats import is_nats_running
 async def test_messenger_issue5_subject_not_in_stream():
 
     async with Messenger().context(host='localhost', port=4222) as mess:
-        reader = get_reader("notexsisting.stream", deliver_policy="last")
+        reader = get_reader("notexsisting.stream",
+                            deliver_policy="last")
+        reader.error_behavior = "RAISE"
         try:
             cfg = await reader.read_next()
         except nats.js.errors.NotFoundError:
