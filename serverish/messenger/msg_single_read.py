@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import asyncio
 from asyncio import Event
+from time import time
 
 import nats.errors
 import param
@@ -13,6 +14,7 @@ from nats.js.api import DeliverPolicy, ConsumerConfig
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
 from serverish.messenger.msg_reader import MsgReader
+from serverish.base.exceptions import MessengerReaderAlreadyOpen
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -37,7 +39,27 @@ class MsgSingleReader(MsgReader):
             tuple: data, meta
 
         """
-        await self.open()
+        interval = 0.1
+        max_delay = 5.0
+        # abolute utc timeout for waiting for data (now (utc) + wait):
+        timeout = time() + wait if wait is not None else None
+
+        while True:
+            try:
+                await self.open()
+                break
+            except MessengerReaderAlreadyOpen:
+                break
+            except Exception as e: # pragma: no cover
+                now = time()
+                if timeout is None or now > timeout:
+                    log.error(f"Failed to open single reader for subject {self.subject}: {e}")
+                    raise e
+                log.warning(f"Failed to open single reader for subject {self.subject}: {e}, retrying in {interval} seconds")
+                remaining = timeout - time() if timeout is not None else None
+                await asyncio.sleep(min(interval, remaining, max_delay) if remaining is not None else min(interval, max_delay))
+                interval *= 2
+
         try:
             data, meta = await asyncio.wait_for(self.read_next(), timeout=wait)
         finally:

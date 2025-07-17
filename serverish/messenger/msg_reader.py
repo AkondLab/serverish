@@ -17,7 +17,8 @@ from nats.js import JetStreamContext
 from nats.js.api import DeliverPolicy, ConsumerConfig
 
 from serverish.base import wait_for_psce
-from serverish.base.exceptions import MessengerReaderStopped
+from serverish.base.exceptions import (MessengerReaderStopped, MessengerNotConnected,
+                                       MessengerReaderAlreadyOpen, MessengerRequestTimeout)
 from serverish.base.fifoset import FifoSet
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
@@ -154,14 +155,24 @@ class MsgReader(MsgDriver):
                         await bmsg.ack()
                     except Exception as e:
                         log.warning(self.fmt(f"Error acking message: {e}"))
-                    data, meta = self.reader.messenger.unpack_nats_msg(bmsg)
+                        # Not essential - we can continue without acking
+
+                    try:
+                        data, meta = self.reader.messenger.unpack_nats_msg(bmsg)
+                    except Exception as e:
+                        log.warning(self.fmt(f"Error unpacking message: {e}"))
+                        # Mesaage malformed - non recoverable error (for this message)
+                        raise self.ErrorException('pop', e)
+
                     try:
                         if self.reader.last_seq is not None and meta['nats']['seq'] <= self.reader.last_seq: # dupes can happen on reopen
                             log.info(self.fmt(f"Skipping duplicated message seq={meta['nats']['seq']}, last_seq={self.reader.last_seq}"))
                             raise self.ContinueException('pop')
                     except self.ContinueException:
+                        # Duplicate removed from queue - recovered from a problem
                         raise
                     except Exception as e:
+                        # Error checking sequence, can be ignored
                         log.warning(self.fmt(f"Error checking seq: {e}"))
                     meta['receive_mode'] = 'pull'
                     try: # nonessential
@@ -170,36 +181,52 @@ class MsgReader(MsgDriver):
                         if len(self.reader.messages) == 0:
                             self.reader._emptied.set()
                     except Exception as e:
-                        log.warning(self.fmt(f"Error unpacking message: {e}"))
+                        # Error in logging, can be ignored
+                        log.warning(self.fmt(f"Error posprocessing message: {e}"))
                     # log.info(self.fmt(f"Returning message seq={meta['nats']['seq']}, last_seq={self.reader.last_seq}"))
                     raise  self.ReturnException('pop', data, meta)
+
             @async_shield
             async def ensure_open(self) -> None:
                 if not self.reader.is_open:
                     if self.reader._expect_beeing_open:
                         log.warning(self.fmt("The reader is not open, but once it has been, trying to reopen"))
-                    await self.reader.open()
+                    await self.reader.open()  # exceptions handled by the async_shield decorator
                     if self.reader.is_open:
                         self.reader._expect_beeing_open = True
+                        # Recover from a problem
                         raise self.ContinueException('open')
                     else:
-                        raise Exception('Opened, but still close')
+                        raise Exception('Opened, but still close') # exception handled by the async_shield decorator
+
             @async_shield
             async def ensure_not_stopped(self) -> None:
                 if self.reader._stop.is_set():
-                    await self.reader.close()
+                    try:
+                        await self.reader.close()
+                    except Exception as e:
+                        # Error in closing can be ignored we are finishing iteration anyway
+                        log.warning(self.fmt(f"Error closing reader: {e}"))
                     raise self.EndIterationException('stop')
+
             @async_shield
             async def ensure_consumer(self) -> None:
                 if self.error is not None:
                     try:
                         ci = await self.reader.pull_subscription.consumer_info()
-                        print(ci)
+                        # Consumer exists and is accessible
+                        log.debug(self.fmt(f"Consumer check OK: {ci.name}"))
                     except nats.js.errors.NotFoundError:
                         log.warning(self.fmt("Consumer has gone, trying to recreate it"))
                         await self.reader._reopen()
                         log.info(self.fmt(f"Consumer re-opened"))
                         raise self.ContinueException('reopen')
+                    except Exception as e:
+                        log.warning(self.fmt(f"Error checking consumer, will try to recreate anyway: {e}"))
+                        await self.reader._reopen()
+                        log.info(self.fmt(f"Consumer looks like re-opened after error"))
+                        raise self.ContinueException('reopen')
+
             @async_shield
             async def read_batch(self) -> None:
                 if len(self.reader.messages) == 0:
@@ -242,6 +269,15 @@ class MsgReader(MsgDriver):
         # The loop which tries hard to get some data
         while True:
             try:
+                # If the step method:
+                #  - retuns data                       - it will raiseReturnException
+                #  - corrected something               - it will raise ContinueException
+                #  - wants stop iteration              - it will raise EndIterationException
+                #  - encounters an unrecoverable error - it will raise ErrorException
+                #  - did not do anything               - it will return and next step will be called
+                # Those mthod should not raise any other exceptions, if they do, it is a bug,
+                # this is enforced by @async_shield (conversion of nay exception to ErrorException)
+
                 # 0. Do we have some data to return already?
                 await st.pop_msg()
                 # 1. Check if iteration have been stopped externally
@@ -281,11 +317,12 @@ class MsgReader(MsgDriver):
                         log.warning(st.fmt(f"read_next error, (retry in {wait_time:.1f}s): {e.error}"))
                         await asyncio.sleep(wait_time)
                     case _:  # should not be reached
-                        log.error(st.fmt(f"Invalid on_connection_close value {self.error_behavior}"))
-                        exit(-1) # this is not i/o error but programming error
+                        log.error(st.fmt(f"Invalid on_connection_close value {self.error_behavior}. "
+                                         f"Raport this as a bug to the serverish maintainers!"))
+                        exit(-107) # this is not i/o error but programming error
             except Exception as e:# should never happen
-                log.error(st.fmt(f"unhandled exception {e}"))
-                exit(-1) # this is not i/o error but programming error
+                log.error(st.fmt(f"Unhandled exception {e}. Raport this as a bug to the serverish maintainers!"))
+                exit(-108) # this is not i/o error but programming error
             st.n += 1
         # end while
 
@@ -406,7 +443,7 @@ class MsgReader(MsgDriver):
 
     async def open(self) -> None:
         if self.pull_subscription is not None:
-            raise RuntimeError("Reader already open, do not reuse MsgReader instances")
+            raise MessengerReaderAlreadyOpen("Reader already open, do not reuse MsgReader instances")
 
         log.debug(f"Opening {self}")
         js = self.connection.js
@@ -433,25 +470,52 @@ class MsgReader(MsgDriver):
     async def _create_pull_subscribtion(self, consumer_conf: ConsumerConfig):
         # Durable consumer is probably not needed (at least problematic)
         # consumer_conf.durable_name = self.name if consumer_conf.durable_name is None else consumer_conf.durable_name
-        ret = await self.connection.js.pull_subscribe(self.subject,
-                                                       durable=consumer_conf.durable_name,
-                                                       config=consumer_conf)
+        if self.connection is None or self.connection.js is None:
+            raise MessengerNotConnected('Cannot create pull subscription, not connected to NATS')
+        try:
+            ret = await self.connection.js.pull_subscribe(self.subject,
+                                                           durable=consumer_conf.durable_name,
+                                                           config=consumer_conf)
+        except TimeoutError as e:
+            raise MessengerRequestTimeout(e)
         ci = await ret.consumer_info()
         return ret
 
     async def _reopen(self) -> None:
-        try:
-            await self.pull_subscription.unsubscribe()
-        except Exception:
-            pass
-        consumer_conf = await self._create_consumer_cfg()
-        # set policy for 'new messages' for BY_START_SEQUENCE if any message was received
-        if self.last_seq is not None:
-            log.info(f"Reopening {self}, from seq={self.last_seq + 1}")
-            consumer_conf.deliver_policy = DeliverPolicy.BY_START_SEQUENCE
-            consumer_conf.opt_start_time = None
-            consumer_conf.opt_start_seq = self.last_seq + 1
-        self.pull_subscription = await self._create_pull_subscribtion(consumer_conf=consumer_conf)
+        """Reopens the pull subscription with retry logic and better error handling"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Clean up existing subscription
+                if self.pull_subscription is not None:
+                    try:
+                        await self.pull_subscription.unsubscribe()
+                    except Exception as e:
+                        log.debug(f"Error unsubscribing during reopen attempt {attempt + 1}: {e}")
+                
+                # Create new consumer configuration
+                consumer_conf = await self._create_consumer_cfg()
+                
+                # Set policy for 'new messages' if any message was received
+                if self.last_seq is not None:
+                    log.info(f"Reopening {self}, from seq={self.last_seq + 1}")
+                    consumer_conf.deliver_policy = DeliverPolicy.BY_START_SEQUENCE
+                    consumer_conf.opt_start_time = None
+                    consumer_conf.opt_start_seq = self.last_seq + 1
+                
+                # Create new subscription
+                self.pull_subscription = await self._create_pull_subscribtion(consumer_conf=consumer_conf)
+                log.info(f"Successfully reopened {self} after {attempt + 1} attempts")
+                return  # Success!
+                
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    log.error(f"Failed to reopen {self} after {max_retries} attempts: {e}")
+                    raise
+                
+                wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
+                log.warning(f"Reopen attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
+                await asyncio.sleep(wait_time)
 
 
 
@@ -479,7 +543,7 @@ class MsgReader(MsgDriver):
         return consumer_conf
 
     async def close(self) -> None:
-        Messenger().connection.remove_reconnect_cb(self.on_nats_reconnect)
+        self.connection.remove_reconnect_cb(self.on_nats_reconnect)
         await super().close()
         await self._close_pull_subscription()
         await self._close_push_subscription()

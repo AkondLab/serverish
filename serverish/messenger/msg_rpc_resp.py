@@ -58,7 +58,7 @@ class MsgRpcResponder(MsgDriver):
             rpc.set_response(data={'c': c})
 
         responder = MsgRpcResponder(subject='subject')
-        responder.open()
+        await responder.open()
         try:
             await responder.register_function(callback)
             # ... wait for incoming messages
@@ -135,7 +135,7 @@ def get_rpcresponder(subject: str) -> 'MsgRpcResponder':
             rpc.set_response(data={'c': c})
 
         responder = MsgRpcResponder(subject='subject')
-        responder.open()
+        await responder.open()
         try:
             await responder.register_function(callback)
             # ... wait for incoming messages

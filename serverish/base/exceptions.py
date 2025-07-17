@@ -7,8 +7,12 @@ class MessengerNotConnected(Exception):
 class MessengerReaderStopped(Exception):
     pass
 
+class MessengerReaderAlreadyOpen(RuntimeError):
+    pass
+
 class MessengerRequestNoResponse(Exception):
     pass
+
 class MessengerRequestNoResponders(MessengerRequestNoResponse):
     pass
 
@@ -21,7 +25,7 @@ class MessengerRequestJetStreamSubject(MessengerRequestNoResponse):
 class MessengerRequestCanceled(MessengerRequestNoResponse):
     pass
 
-class MessengerRequestTimeout(MessengerRequestNoResponse):
+class MessengerRequestTimeout(MessengerRequestNoResponse, TimeoutError):
     pass
 
 class MessengerRequestNoResultYet(MessengerRequestNoResponse):

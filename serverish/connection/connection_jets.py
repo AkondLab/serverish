@@ -89,9 +89,14 @@ class ConnectionJetStream(ConnectionNATS):
 
     async def nats_reconnected_cb(self):
         await super().nats_reconnected_cb()
-        self.setup_jetstream()
-        await self.update_statuses()
-        logging.info(f'Jeststream reconnect status: {self.format_status()}')
+        try:
+            self.setup_jetstream()
+            await self.update_statuses()
+            logging.info(f'JetStream reconnect status: {self.format_status()}')
+        except Exception as e:
+            logging.error(f'Error setting up JetStream on reconnection cb: {e}')
+            # Update status to reflect the error
+            await self.update_statuses()
 
     async def ensure_subject_in_stream(self, stream: str, subject: str,
                                        create_stram_if_needed: bool = False,
