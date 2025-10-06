@@ -340,21 +340,36 @@ class Messenger(Singleton):
             deliver_policy (str): deliver policy, one of 'all', 'last', 'new', 'by_start_time', will be passed to consumer config
             opt_start_time (datetime): start time for 'by_start_time' deliver policy, will be passed to consumer config, must carry TZ info
             kwargs: additional arguments to pass to the reader and underlying NATS consumer config
+                    MsgReader-specific params (nowait, error_behavior, on_missed_messages) are extracted
+                    and passed directly to MsgReader; remaining params go to consumer_cfg
 
         Returns:
             MsgReader: message subscriber
 
         Usage:
-            reader = Messenger.get_reader('subject'):
+            reader = Messenger.get_reader('subject', nowait=True):
             async for msg in reader:
                 print(msg)
         """
         from serverish.messenger.msg_reader import MsgReader
+
+        # Extract MsgReader-specific parameters
+        reader_params = {}
+        consumer_cfg = {}
+        reader_param_names = {'nowait', 'error_behavior', 'on_missed_messages'}
+
+        for key, value in kwargs.items():
+            if key in reader_param_names:
+                reader_params[key] = value
+            else:
+                consumer_cfg[key] = value
+
         return MsgReader(subject=subject,
                          parent=Messenger(),
                          deliver_policy=deliver_policy,
                          opt_start_time=opt_start_time,
-                         consumer_cfg=kwargs)
+                         consumer_cfg=consumer_cfg,
+                         **reader_params)
 
     @staticmethod
     def get_singlepublisher(subject):

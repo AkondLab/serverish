@@ -244,30 +244,32 @@ class MsgReader(MsgDriver):
             @async_shield
             async def read_batch(self) -> None:
                 if len(self.reader.messages) == 0:
-                    timeout = 100.0 # min(0.1 + self.n/10.0, 5.0)
-                    # batch = 1 if self.error is not None else 100 # recover slowly
-                    log.debug(self.fmt(f"Pulling {self.reader.batch} messages with timeout {timeout}s"))
-                    new_msgs = await self.reader.fetch_available(batch=self.reader.batch, timeout=timeout)
+                    # For fetch_available, timeout is network latency budget (not message wait time)
+                    # Server responds immediately with no_wait=True, we just account for slow networks
+                    fetch_timeout = 2.0  # Reduced - should be quick with no_wait
+                    log.debug(self.fmt(f"Pulling {self.reader.batch} messages with timeout {fetch_timeout}s"))
+                    new_msgs = await self.reader.fetch_available(batch=self.reader.batch, timeout=fetch_timeout)
                     log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
 
-                    # If no messages were available immediately, switch to blocking mode
-                    # to wait for at least one message more efficiently
+                    # If no messages were available (got 404 from server or timeout), decide what to do
                     if len(new_msgs) == 0:
                         if self.reader.nowait:
-                            log.debug(self.fmt(f"No new messages found, finishing due to nowait"))
+                            # Server confirmed no messages - finish iteration
+                            log.debug(self.fmt(f"No messages available, finishing due to nowait"))
                             raise self.EndIterationException('nowait')
 
-                        log.debug(self.fmt(f"No messages available immediately, waiting for at least one message with timeout {timeout:0.1f}s"))
+                        # Non-nowait mode: wait for NEW messages to arrive
+                        blocking_timeout = 100.0
+                        log.debug(self.fmt(f"No messages currently available, waiting for new messages (timeout {blocking_timeout}s)"))
 
-                        # Use the regular fetch operation from nats (which blocks)
+                        # Use the regular fetch operation which waits for messages to arrive
                         try:
-                            new_msgs = await self.reader.pull_subscription.fetch(1, timeout=timeout)
-                            log.debug(self.fmt(f"Received {len(new_msgs)} message while blocking waiting"))
+                            new_msgs = await self.reader.pull_subscription.fetch(1, timeout=blocking_timeout)
+                            log.debug(self.fmt(f"Received {len(new_msgs)} new message(s)"))
                         except asyncio.TimeoutError:
-                            log.debug(self.fmt(f"No meesge before timeout"))
+                            log.debug(self.fmt(f"No new messages arrived within {blocking_timeout}s"))
                         except Exception as e:
                             log.warning(self.fmt(f"Error waiting for messages: {e}"))
-                    # fi : no messages available immediately
 
                     self.reader.messages.extend(new_msgs)
 
@@ -345,21 +347,30 @@ class MsgReader(MsgDriver):
         # end while
 
 
-    async def fetch_available(self, batch=10, timeout = 0.1):
-        """[NATS fix] Fetch only immediately available messages without blocking
+    async def fetch_available(self, batch=10, timeout=2.0):
+        """[NATS fix] Fetch only immediately available messages without blocking for new messages
 
-        Path on lack of functionality of JetStreamContext.PullSubscription.fetch
-        By default uses only very short timeout to account for network latency
+        Uses no_wait=True protocol:
+        - Server sends available messages immediately
+        - Server sends 404 status if no messages exist
+        - We wait for server response (network latency) but not for new messages to arrive
+
+        Args:
+            batch: Maximum number of messages to fetch
+            timeout: Network latency budget (default 2s for local/fast networks)
+                     NOT a "wait for messages" timeout - server won't wait
+
+        Returns:
+            List of messages that were immediately available on server
         """
         import json
 
         pull_subscription = self.pull_subscription
-        # Get from internal queue first
         msgs = []
         needed = batch
         queue = pull_subscription._sub._pending_queue
 
-        # First get messages from the internal queue
+        # First, drain messages already in local queue
         while not queue.empty() and needed > 0:
             try:
                 msg = queue.get_nowait()
@@ -368,14 +379,15 @@ class MsgReader(MsgDriver):
                 if not status:  # Skip status messages
                     msgs.append(msg)
                     needed -= 1
+                queue.task_done()
             except Exception:
                 pass
 
-        # If we already have enough messages, return early
+        # If we got enough from queue, return immediately
         if needed == 0:
             return msgs
 
-        # Make one no_wait request to get immediately available messages
+        # Send pull request: no_wait=True means server responds immediately
         next_req = {"batch": needed, "no_wait": True}
         await pull_subscription._nc.publish(
             pull_subscription._nms,
@@ -383,26 +395,74 @@ class MsgReader(MsgDriver):
             pull_subscription._deliver,
         )
 
+        # Wait for server response (messages and/or 404 status)
+        # The server will respond quickly because no_wait=True
+        # We just need to account for network latency
         start_time = time.monotonic()
+        got_404_status = False
+        got_any_message = False
 
-        # Process the response with a very short timeout
-        while needed > 0:
+        while not got_404_status:
             deadline = timeout - (time.monotonic() - start_time)
             if deadline <= 0:
+                # Timeout - if we got some messages, that's OK (server might not send 404 after exact batch)
+                # If we got nothing, this is a network problem
+                if not got_any_message and len(msgs) == 0:
+                    log.warning(f"{self} Timeout after {timeout}s waiting for server response (network issue?)")
+                else:
+                    log.debug(f"{self} Timeout after getting {len(msgs)} messages (no 404 received)")
                 break
 
             try:
-                msg = await self.next_msg(timeout=0.0) # nonblocking here
+                # Wait for server to respond (messages or 404)
+                msg = await asyncio.wait_for(queue.get(), timeout=deadline)
+                pull_subscription._sub._pending_size -= len(msg.data)
+                queue.task_done()
+
                 status = JetStreamContext.is_status_msg(msg)
-                if not status:
-                    msgs.append(msg)
-                    needed -= 1
-                elif status == "404":  # NO_MESSAGES
+
+                if status == "404":
+                    # Server says: no (more) messages available
+                    # This is the definitive "done" signal
+                    log.debug(f"{self} Server confirmed no more messages (404 status)")
+                    got_404_status = True
                     break
+                elif status == "408":
+                    # Request Timeout - server gave us what it had but couldn't fill batch
+                    # This is effectively "no more messages available right now"
+                    log.debug(f"{self} Server returned partial batch (408 status - request timeout)")
+                    got_404_status = True  # Treat same as 404 - no more messages available
+                    break
+                elif status:
+                    # Other status message (shouldn't happen with pull, but handle it)
+                    log.debug(f"{self} Received status: {status}")
+                    continue
+                else:
+                    # Real message
+                    msgs.append(msg)
+                    got_any_message = True
+                    needed -= 1
+
+                    # If we got all requested messages, give server very short time to send 404
+                    # but don't wait long - likely there are more messages
+                    if needed == 0:
+                        # Very short grace period for 404 status (100ms)
+                        # If 404 doesn't arrive, we'll just fetch again on next iteration
+                        remaining_time = timeout - (time.monotonic() - start_time)
+                        if remaining_time > 0.1:
+                            deadline = 0.1
+                            timeout = time.monotonic() - start_time + 0.1  # Update timeout to exit on next deadline check
+
             except asyncio.TimeoutError:
+                # Timeout after getting messages is OK - server might not send 404 if we got exact batch
+                if got_any_message or len(msgs) > 0:
+                    log.debug(f"{self} Got {len(msgs)} messages, no 404 status (normal for exact batch)")
+                else:
+                    # No messages at all - this could be empty subject or network problem
+                    log.debug(f"{self} No messages or 404 within {timeout}s")
                 break
-            except asyncio.QueueEmpty:
-                log.debug(f"{self} Queue is empty")
+            except Exception as e:
+                log.warning(f"{self} Error in fetch_available: {e}")
                 break
 
         return msgs
@@ -539,6 +599,13 @@ class MsgReader(MsgDriver):
 
     async def _create_consumer_cfg(self) -> ConsumerConfig:
         cfg = self.consumer_cfg.copy()
+
+        # Remove MsgReader-specific parameters that are not part of ConsumerConfig
+        # These are handled by MsgReader itself, not passed to NATS
+        reader_params = ['nowait', 'error_behavior', 'on_missed_messages']
+        for param in reader_params:
+            cfg.pop(param, None)
+
         # Convert the delivery policy from a string to the appropriate DeliverPolicy enum
         if self.deliver_policy is not None:
             cfg['deliver_policy'] = DeliverPolicy(self.deliver_policy)
