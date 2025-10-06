@@ -254,7 +254,7 @@ class MsgReader(MsgDriver):
                     # If no messages were available immediately, switch to blocking mode
                     # to wait for at least one message more efficiently
                     if len(new_msgs) == 0:
-                        if self.nowait:
+                        if self.reader.nowait:
                             log.debug(self.fmt(f"No new messages found, finishing due to nowait"))
                             raise self.EndIterationException('nowait')
 
