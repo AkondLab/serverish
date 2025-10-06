@@ -33,6 +33,17 @@ class MsgReader(MsgDriver):
 
     Use this class if you want to read data from a messenger subject.
     Check for specialist readers for common use cases.
+
+    Args:
+        subject (str): subject to subscribe to
+        parent (Messenger): Messenger instance to use, if None, will use default Messenger()
+        deliver_policy (str): deliver policy, one of 'all', 'last', 'new', 'by_start_sequence', 'by_start_time', 'last_per_subject'
+        opt_start_time (datetime): start time for 'by_start_time' deliver policy
+        consumer_cfg (dict): additional consumer configuration, see nats.js.api.ConsumerConfig
+        nowait (bool): if True, read_next will return immediately if no messages are available and will finish iteration
+        error_behavior (str): on serious error (e.g. disconnection), one of 'RAISE', 'FINISH', 'WAIT'
+        on_missed_messages (str): on missed messages (e.g. during broken connection), one of 'SKIP', 'REPLAY'
+
     """
 
     deliver_policy: str = param.ObjectSelector(default='all',
@@ -57,11 +68,15 @@ class MsgReader(MsgDriver):
                                               doc="On missed message (e.g. during broken connection): "
                                                   "SKIP - skip delayed messages"
                                                   "REPLAY - read and replay")
+    nowait = param.Boolean(default=False,
+                            doc="If True, read_next will return immediately if no messages are available and will "
+                                "finish iteration")
 
     def __init__(self, subject, parent = None,
                  deliver_policy = 'all',
                  opt_start_time = None,
                  consumer_cfg=None,
+                 nowait: bool = False,
                  **kwargs) -> None:
         if parent is None:
             parent = Messenger()
@@ -151,7 +166,7 @@ class MsgReader(MsgDriver):
             async def pop_msg(self) -> None:
                 if len(self.reader.messages) > 0:
                     bmsg = self.reader.messages.popleft()
-                    try: # nonessential
+                    try: # nonessential  #TODO: implement delayed acking / no acking as na option
                         await bmsg.ack()
                     except Exception as e:
                         log.warning(self.fmt(f"Error acking message: {e}"))
@@ -239,6 +254,10 @@ class MsgReader(MsgDriver):
                     # If no messages were available immediately, switch to blocking mode
                     # to wait for at least one message more efficiently
                     if len(new_msgs) == 0:
+                        if self.nowait:
+                            log.debug(self.fmt(f"No new messages found, finishing due to nowait"))
+                            raise self.EndIterationException('nowait')
+
                         log.debug(self.fmt(f"No messages available immediately, waiting for at least one message with timeout {timeout:0.1f}s"))
 
                         # Use the regular fetch operation from nats (which blocks)
