@@ -76,7 +76,6 @@ class MsgReader(MsgDriver):
                  deliver_policy = 'all',
                  opt_start_time = None,
                  consumer_cfg=None,
-                 nowait: bool = False,
                  **kwargs) -> None:
         if parent is None:
             parent = Messenger()
