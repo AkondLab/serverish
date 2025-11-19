@@ -6,6 +6,7 @@
 * Singletons
 * Connections management and diagnostics
 * NATS based Messenger
+* Live documents - auto-updating configuration from NATS
 
 See [`doc` directory](doc/) for more documentation.
 
@@ -27,6 +28,7 @@ this will install `nats-py` package.
 - Pytest fixtures for NATS on CI
 
 ## Changes
+* 1.5 Introduces live documents (`LiveDocument`, `get_documentreader()`, `get_live_document()`) for auto-updating configuration from NATS.
 * 1.4 Contains improvements to the network problems recovery and connection tracking.
 * 1.1 Switches to `param` 2.* nad `py-nats` 1.7.*. Also, publisher may reraise exceptions or ignore them.
 * 1.0  Changes NATS subscriptions to pull only

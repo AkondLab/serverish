@@ -525,6 +525,37 @@ class Messenger(Singleton):
                                     deliver_policy=deliver_policy,
                                     **kwargs)
 
+    @staticmethod
+    def get_documentreader(subject: str,
+                          initial_wait: float = 5.0,
+                          **kwargs) -> 'MsgDocumentReader':
+        """Returns a document reader for a given subject
+
+        The document reader maintains a live document that auto-updates when
+        new versions are published to the subject. It reads the initial document
+        on open() and subscribes to updates in the background.
+
+        Args:
+            subject (str): subject to read from
+            initial_wait (float): timeout in seconds for initial document read
+            **kwargs: additional arguments to pass to the reader and underlying NATS consumer config
+
+        Returns:
+            MsgDocumentReader: a document reader for the given subject
+
+        Example:
+            reader = Messenger.get_documentreader('app.config')
+            await reader.open()
+            host = reader.document.database.host
+            await reader.close()
+
+        """
+        from serverish.messenger.msg_document_read import MsgDocumentReader
+        return MsgDocumentReader(subject=subject,
+                                parent=Messenger(),
+                                initial_wait=initial_wait,
+                                **kwargs)
+
 
 class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
