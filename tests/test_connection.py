@@ -10,7 +10,7 @@ from serverish.base.status import StatusEnum
 
 def internet_on():
     try:
-        socket.create_connection(("1.1.1.1", 53))  # Cloudflare DNS, should be always accessible
+        socket.create_connection(("8.8.8.8", 53))  # Cloudflare DNS, should be always accessible
         return True
     except OSError:
         pass
