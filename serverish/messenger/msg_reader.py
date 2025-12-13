@@ -80,7 +80,7 @@ class MsgReader(MsgDriver):
         if parent is None:
             parent = Messenger()
         consumer_cfg_defaults = {
-            'inactive_threshold': 60
+            'inactive_threshold': 300  # 5 minutes - allows ample time for health checks to detect and recover
         }
         if consumer_cfg is not None:
             consumer_cfg_defaults.update(consumer_cfg)
@@ -96,6 +96,12 @@ class MsgReader(MsgDriver):
         self.pull_batch = deque()
         self.id_cache = FifoSet(128)
         self._expect_beeing_open = False
+        # Health monitoring fields
+        self._message_count: int = 0
+        self._last_message_time: float | None = None
+        self._reconnect_count: int = 0
+        self._last_error: Exception | None = None
+        self._last_health_check_time: float | None = None
         super().__init__(subject=subject, parent=parent,
                          deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg_defaults,
                          **kwargs)
@@ -148,6 +154,8 @@ class MsgReader(MsgDriver):
             log: List[str] = field(default_factory=list)
             start_time: datetime = field(default_factory=datetime.now)
             error: Exception = None
+            last_consumer_check: float = field(default_factory=time.monotonic)
+            consumer_check_interval: float = 10.0  # Check consumer health every 10 seconds
 
             def async_shield(func):
                 @functools.wraps(func)
@@ -192,6 +200,9 @@ class MsgReader(MsgDriver):
                     try: # nonessential
                         self.reader.messenger.log_msg_trace(data, meta, f"SUB PULL iteration from {self.reader.subject}")
                         self.reader.last_seq = meta['nats']['seq']
+                        # Update health monitoring stats
+                        self.reader._message_count += 1
+                        self.reader._last_message_time = time.monotonic()
                         if len(self.reader.messages) == 0:
                             self.reader._emptied.set()
                     except Exception as e:
@@ -225,25 +236,48 @@ class MsgReader(MsgDriver):
 
             @async_shield
             async def ensure_consumer(self) -> None:
-                if self.error is not None:
+                # Proactive health check: verify consumer exists periodically (every 10s)
+                # This prevents silent failures when ephemeral consumers expire
+                now = time.monotonic()
+                should_check = (
+                    self.error is not None or  # Always check after errors
+                    (now - self.last_consumer_check) > self.consumer_check_interval  # Periodic check
+                )
+
+                if should_check:
+                    self.last_consumer_check = now
+                    self.reader._last_health_check_time = now
                     try:
                         ci = await self.reader.pull_subscription.consumer_info()
                         # Consumer exists and is accessible
-                        log.debug(self.fmt(f"Consumer check OK: {ci.name}"))
+                        log.debug(self.fmt(f"Consumer health check OK: {ci.name}"))
                     except nats.js.errors.NotFoundError:
-                        log.warning(self.fmt("Consumer has gone, trying to recreate it"))
+                        log.warning(self.fmt("Consumer has gone (detected by health check), recreating"))
                         await self.reader._reopen()
-                        log.info(self.fmt(f"Consumer re-opened"))
+                        log.info(self.fmt(f"Consumer re-opened after health check detected loss"))
                         raise self.ContinueException('reopen')
                     except Exception as e:
-                        log.warning(self.fmt(f"Error checking consumer, will try to recreate anyway: {e}"))
+                        log.warning(self.fmt(f"Error during consumer health check: {e}, will try to recreate"))
                         await self.reader._reopen()
-                        log.info(self.fmt(f"Consumer looks like re-opened after error"))
+                        log.info(self.fmt(f"Consumer re-opened after health check error"))
                         raise self.ContinueException('reopen')
+
+            @async_shield
+            async def check_reconnect_needed(self) -> None:
+                """Check if NATS reconnection occurred and recreate consumer if needed"""
+                if self.reader._reconnect_needed.is_set():
+                    self.reader._reconnect_needed.clear()
+                    log.info(self.fmt("NATS reconnection detected, recreating consumer"))
+                    await self.reader._reopen()
+                    log.info(self.fmt("Consumer recreated after NATS reconnection"))
+                    raise self.ContinueException('reconnect')
 
             @async_shield
             async def read_batch(self) -> None:
                 if len(self.reader.messages) == 0:
+                    # Check for reconnection before fetching
+                    await self.check_reconnect_needed()
+
                     # For fetch_available, timeout is network latency budget (not message wait time)
                     # Server responds immediately with no_wait=True, we just account for slow networks
                     fetch_timeout = 2.0  # Reduced - should be quick with no_wait
@@ -259,17 +293,38 @@ class MsgReader(MsgDriver):
                             raise self.EndIterationException('nowait')
 
                         # Non-nowait mode: wait for NEW messages to arrive
-                        blocking_timeout = 100.0
-                        log.debug(self.fmt(f"No messages currently available, waiting for new messages (timeout {blocking_timeout}s)"))
+                        # Break into shorter intervals to allow health checks and reconnection handling
+                        blocking_interval = 10.0  # Check every 10 seconds
+                        max_wait_cycles = 10  # Total wait: 10 * 10s = 100s
 
-                        # Use the regular fetch operation which waits for messages to arrive
-                        try:
-                            new_msgs = await self.reader.pull_subscription.fetch(1, timeout=blocking_timeout)
-                            log.debug(self.fmt(f"Received {len(new_msgs)} new message(s)"))
-                        except asyncio.TimeoutError:
-                            log.debug(self.fmt(f"No new messages arrived within {blocking_timeout}s"))
-                        except Exception as e:
-                            log.warning(self.fmt(f"Error waiting for messages: {e}"))
+                        for cycle in range(max_wait_cycles):
+                            # Check for reconnection before each wait cycle
+                            if self.reader._reconnect_needed.is_set():
+                                self.reader._reconnect_needed.clear()
+                                log.info(self.fmt("NATS reconnection detected during wait, recreating consumer"))
+                                await self.reader._reopen()
+                                raise self.ContinueException('reconnect_during_wait')
+
+                            log.debug(self.fmt(f"Waiting for messages (cycle {cycle + 1}/{max_wait_cycles}, {blocking_interval}s)"))
+                            try:
+                                new_msgs = await self.reader.pull_subscription.fetch(1, timeout=blocking_interval)
+                                if new_msgs:
+                                    log.debug(self.fmt(f"Received {len(new_msgs)} new message(s)"))
+                                    break
+                            except asyncio.TimeoutError:
+                                # Timeout is normal - verify consumer still exists before next cycle
+                                try:
+                                    await self.reader.pull_subscription.consumer_info()
+                                except nats.js.errors.NotFoundError:
+                                    log.warning(self.fmt("Consumer expired during wait, recreating"))
+                                    await self.reader._reopen()
+                                    raise self.ContinueException('consumer_expired_during_wait')
+                                except Exception as e:
+                                    log.warning(self.fmt(f"Error checking consumer during wait: {e}"))
+                                    # Continue to next cycle, will be handled by health check
+                            except Exception as e:
+                                log.warning(self.fmt(f"Error waiting for messages: {e}"))
+                                break  # Exit loop on other errors
 
                     self.reader.messages.extend(new_msgs)
 
@@ -325,6 +380,7 @@ class MsgReader(MsgDriver):
             except st.ErrorException as e:  # some error
                 st.logput(f'{e.task}-err')
                 st.error = e.error
+                self._last_error = e.error  # Track for health monitoring
                 match self.error_behavior:
                     case 'RAISE':
                         log.error(st.fmt(f"raising read_next error:  {e.error}"))
@@ -561,6 +617,7 @@ class MsgReader(MsgDriver):
 
     async def _reopen(self) -> None:
         """Reopens the pull subscription with retry logic and better error handling"""
+        self._reconnect_count += 1
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -727,6 +784,51 @@ class MsgReader(MsgDriver):
 
     def is_pull(self):
         return not self._emptied.is_set()
+
+    @property
+    def health_status(self) -> dict:
+        """Returns current health status of the reader for monitoring
+
+        Returns:
+            dict with health information:
+                - is_open: Whether the reader is currently open
+                - subject: The subject being read
+                - messages_received: Total count of messages received
+                - last_message_time: Timestamp of last message (monotonic time) or None
+                - last_message_ago: Seconds since last message or None if no messages yet
+                - reconnect_count: Number of times the consumer was recreated
+                - last_error: String representation of last error or None
+                - last_health_check_time: Timestamp of last health check or None
+                - consumer_exists: Whether the consumer currently exists (checks synchronously)
+        """
+        last_msg_ago = None
+        if self._last_message_time is not None:
+            last_msg_ago = time.monotonic() - self._last_message_time
+
+        return {
+            'is_open': self.is_open,
+            'subject': self.subject,
+            'messages_received': self._message_count,
+            'last_message_time': self._last_message_time,
+            'last_message_ago': last_msg_ago,
+            'reconnect_count': self._reconnect_count,
+            'last_error': str(self._last_error) if self._last_error else None,
+            'last_health_check_time': self._last_health_check_time,
+        }
+
+    async def check_consumer_exists(self) -> bool:
+        """Check if consumer still exists without raising
+
+        Returns:
+            True if consumer exists, False otherwise
+        """
+        if self.pull_subscription is None:
+            return False
+        try:
+            await self.pull_subscription.consumer_info()
+            return True
+        except Exception:
+            return False
 
     def __str__(self):
         return f"[{'PULL' if self.is_pull() else 'PUSH'}]{super().__str__()}"

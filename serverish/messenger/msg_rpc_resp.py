@@ -52,6 +52,9 @@ class MsgRpcResponder(MsgDriver):
 
     This class registers callback function to process messages sent by `MsgRpcRequester`.
 
+    The responder automatically resubscribes after NATS reconnection to maintain reliability
+    for server components.
+
     Usage:
         def callback(rpc: Rpc):
             c = rpc.data['a'] + rpc.data['b']
@@ -68,7 +71,39 @@ class MsgRpcResponder(MsgDriver):
 
     def __init__(self, **kwargs) -> None:
         self.subscription: Subscription | None = None
+        self._callback: Callable | None = None  # Store callback for resubscription
+        self._reconnect_count: int = 0
         super().__init__(**kwargs)
+
+    async def open(self) -> None:
+        """Open the responder and register for reconnection callbacks"""
+        self.connection.add_reconnect_cb(self.on_nats_reconnect)
+        await super().open()
+
+    async def on_nats_reconnect(self) -> None:
+        """Handle NATS reconnection by resubscribing"""
+        log.info(f"NATS reconnected, resubscribing RPC responder for {self.subject}")
+        if self._callback is not None:
+            await self._resubscribe()
+
+    async def _resubscribe(self) -> None:
+        """Internal method to resubscribe after connection recovery"""
+        self._reconnect_count += 1
+        # Clean up old subscription if exists
+        if self.subscription is not None:
+            try:
+                await self.subscription.unsubscribe()
+            except Exception as e:
+                log.debug(f"Error unsubscribing during resubscribe: {e}")
+            self.subscription = None
+
+        # Re-register with the stored callback
+        if self._callback is not None:
+            try:
+                await self._register_function_internal(self._callback)
+                log.info(f"Successfully resubscribed RPC responder for {self.subject}")
+            except Exception as e:
+                log.error(f"Failed to resubscribe RPC responder for {self.subject}: {e}")
 
     async def register_function(self, callback: Callable[[Rpc], None] | Callable[[Rpc], asyncio.Future]):
         """Sets a callback function for each message
@@ -79,6 +114,12 @@ class MsgRpcResponder(MsgDriver):
                 (`data` and `meta` properties)  and allows to set or send response.
                 Callback function should return None.
         """
+        # Store callback for potential resubscription after reconnection
+        self._callback = callback
+        await self._register_function_internal(callback)
+
+    async def _register_function_internal(self, callback: Callable[[Rpc], None] | Callable[[Rpc], asyncio.Future]):
+        """Internal method to register the callback with NATS subscription"""
         from nats.aio.client import Client as NATS
 
         nats: NATS = self.connection.nc
@@ -114,9 +155,22 @@ class MsgRpcResponder(MsgDriver):
         self.subscription = await nats.subscribe(self.subject, queue=self.subject, cb=_cb)
 
     async def close(self) -> None:
+        """Close the responder and unregister from reconnection callbacks"""
+        self.connection.remove_reconnect_cb(self.on_nats_reconnect)
         if self.subscription is not None:
             await self.subscription.unsubscribe()
+        self._callback = None  # Clear callback reference
         return await super().close()
+
+    @property
+    def health_status(self) -> dict:
+        """Returns current health status of the RPC responder for monitoring"""
+        return {
+            'is_open': self.is_open,
+            'subject': self.subject,
+            'has_subscription': self.subscription is not None,
+            'reconnect_count': self._reconnect_count,
+        }
 
 
 def get_rpcresponder(subject: str) -> 'MsgRpcResponder':
