@@ -298,3 +298,42 @@ class LiveDocument(Mapping):
             String representation of the underlying data
         """
         return str(self._data)
+
+    # python
+    def _plain_value(self, value):
+        """Return a plain deep-copied value suitable for serialization."""
+        if isinstance(value, LiveDocument):
+            return value.to_dict()
+        if isinstance(value, dict):
+            return copy.deepcopy(value)
+        # for simple immutable values deepcopy is fine; for other objects leave as-is
+        try:
+            return copy.deepcopy(value)
+        except Exception:
+            return value
+
+    def items(self):
+        """Yield (key, plain_value) pairs suitable for dict(...) / JSON dumps.
+
+        This does a deep conversion of any nested LiveDocument/dict but does not
+        change __getitem__ behaviour (so ld[key] still returns LiveDocument).
+        """
+        for key in self._data:
+            # if we have a cached child LiveDocument, use its snapshot/plain dict
+            child = self._children.get(key)
+            if child is not None:
+                yield key, child.to_dict()
+            else:
+                yield key, self._plain_value(self._data[key])
+
+    def values(self):
+        """Yield plain values (converted) for each key."""
+        for _, v in self.items():
+            yield v
+
+    def keys(self):
+        """Return an iterator of keys (same as before)."""
+        return iter(self._data.keys())
+
+
+

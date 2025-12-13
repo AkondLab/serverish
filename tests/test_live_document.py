@@ -11,6 +11,8 @@ focusing on:
 
 import asyncio
 import pytest
+import json
+
 
 from serverish.messenger.live_document import LiveDocument
 
@@ -1146,3 +1148,90 @@ async def test_livedocument_reappearing_subtree():
     # And getting a fresh reference should be the same object
     db2 = config.database
     assert db is db2
+
+
+
+def test_dict_constructor_preserves_livedocument_values_and_is_not_json_serializable():
+    doc = LiveDocument({
+        'database': {
+            'host': 'localhost',
+            'port': 5432
+        },
+        'name': 'app'
+    })
+
+    # dict(doc) uses mapping protocol -> values for nested dicts remain LiveDocument
+    constructed = dict(doc)
+    assert isinstance(constructed['database'], LiveDocument)
+    # json.dumps should fail for LiveDocument instances
+    with pytest.raises(TypeError):
+        json.dumps(constructed)
+
+
+def test_items_view_produces_plain_dicts_and_is_json_serializable():
+    doc = LiveDocument({
+        'database': {
+            'host': 'localhost',
+            'port': 5432
+        },
+        'name': 'app'
+    })
+
+    # Ensure a cached child exists (simulate normal usage)
+    _ = doc['database']
+
+    # dict(doc.items()) should produce plain nested dicts, suitable for JSON
+    plain = dict(doc.items())
+    assert isinstance(plain['database'], dict)
+    # json.dumps should succeed
+    json.dumps(plain)  # should not raise
+
+
+def test_to_dict_returns_deep_copy_and_is_json_serializable():
+    doc = LiveDocument({
+        'database': {
+            'host': 'localhost',
+            'port': 5432
+        }
+    })
+
+    plain = doc.to_dict()
+    assert isinstance(plain, dict)
+    assert isinstance(plain['database'], dict)
+    # json.dumps should succeed
+    json.dumps(plain)
+
+    # Mutating returned plain dict must not affect LiveDocument
+    plain['database']['host'] = 'modified'
+    assert doc.database.host == 'localhost'
+
+
+def test_dict_constructor_does_not_mutate_live_document_or_children():
+    doc = LiveDocument({
+        'database': {
+            'host': 'localhost'
+        }
+    })
+
+    child = doc['database']  # cached LiveDocument
+    constructed = dict(doc)
+
+    # dict(doc) should not have replaced the cached child in the original LiveDocument
+    assert doc['database'] is child
+    # and the constructed mapping contains a LiveDocument (not a plain dict)
+    assert isinstance(constructed['database'], LiveDocument)
+
+
+def test_dict_of_items_equals_to_dict_to_dict_for_serialization():
+    doc = LiveDocument({
+        'a': {'v': 1},
+        'b': 2
+    })
+
+    # both paths produce plain serializable structures
+    from_items = dict(doc.items())
+    from_to_dict = doc.to_dict()
+
+    assert from_items == from_to_dict
+    json.dumps(from_items)
+    json.dumps(from_to_dict)
