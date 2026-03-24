@@ -62,7 +62,7 @@
                 },
                 "stream": {
                     "type": "string",
-                    "description": "Name of the JestStream stream (if any), message is stored in."
+                    "description": "Name of the JetStream stream (if any), message is stored in."
                 },
                 "consumer": {
                     "type": "string",

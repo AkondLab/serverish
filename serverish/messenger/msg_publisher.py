@@ -46,8 +46,8 @@ class MsgPublisher(MsgDriver):
         try:
             await self.connection.js.publish(self.subject, bdata, **kwargs)
         except AttributeError: # no js - not connected
-            log.error(f"Trying to publish to subject '{self.subject}' failed. JestStream not connected")
-            raise MessengerNotConnected(f"Trying to publish to subject '{self.subject}' failed. JestStream not connected")
+            log.error(f"Trying to publish to subject '{self.subject}' failed. JetStream not connected")
+            raise MessengerNotConnected(f"Trying to publish to subject '{self.subject}' failed. JetStream not connected")
         except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError):
             # it's OK for non-jetstream, we just don't have subscribers yet
             log.debug(

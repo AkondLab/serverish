@@ -14,7 +14,7 @@ def find_nats_host(port = 4222):
     for host in candidates:
         if is_port_open(host, port):
             return host
-        return None
+    return None
 
 def is_port_open(host, port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
