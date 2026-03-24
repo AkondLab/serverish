@@ -335,6 +335,21 @@ class MsgProgressPublisher(MsgPublisher):
         return all(task.finished for task in self.tasks.values())
 
 
+    @property
+    def health_status(self) -> dict:
+        """Returns current health status of the progress publisher for monitoring
+
+        Extends base health_status with progress-specific metrics.
+        """
+        status = super().health_status
+        status.update({
+            'active_tasks': len(self.tasks),
+            'all_done': self.all_done,
+            'finished': self.finished,
+        })
+        return status
+
+
 def get_progresspublisher(subject) -> MsgProgressPublisher:
     """Returns a progress tracking publisher for a given subject
 

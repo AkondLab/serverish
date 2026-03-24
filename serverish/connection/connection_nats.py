@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import time
 from typing import Iterable, Tuple
 
 import param
+import nats.errors
 
 from nats.aio.client import Client as NATS
 
@@ -16,7 +18,12 @@ _logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 
 class ConnectionNATS(Connection):
-    """Watches NATS connection and reports status"""
+    """Watches NATS connection and reports status
+
+    Tracks slow consumer events for monitoring. Slow consumers occur when
+    a subscriber cannot keep up with the message flow (primarily affects
+    core NATS push subscriptions, less relevant for JetStream pull consumers).
+    """
     subject_prefix = param.String(default='srvh')
     nc = param.ClassSelector(class_=NATS, allow_None=True)
 
@@ -39,12 +46,30 @@ class ConnectionNATS(Connection):
                                nats_server = self.diagnose_nats_server_port,
                                )
         self.reconnect_cbs = []
+        # Slow consumer tracking
+        self._slow_consumer_count: int = 0
+        self._last_slow_consumer_time: float | None = None
+        self._error_count: int = 0
+        self._last_error: Exception | None = None
         # self.status['nats'] = Status.new_na(msg='Not initialized')
 
     async def nats_error_cb(self, e: Exception):
-        """Error callback for NATS connection"""
+        """Error callback for NATS connection
+
+        Specifically tracks slow consumer errors which indicate a subscriber
+        cannot keep up with message flow.
+        """
+        self._error_count += 1
+        self._last_error = e
+
+        if isinstance(e, nats.errors.SlowConsumerError):
+            self._slow_consumer_count += 1
+            self._last_slow_consumer_time = time.monotonic()
+            _logger.warning(f'NATS slow consumer detected (total: {self._slow_consumer_count}): {e}')
+        else:
+            _logger.debug(f'NATS error: {e}, Status: {self.format_status()}')
+
         await self.update_statuses()
-        _logger.debug(f'NATS error: {e}, Status: {self.format_status()}')
 
     async def nats_disconnected_cb(self):
         """Disconnected callback for NATS connection"""
@@ -71,6 +96,34 @@ class ConnectionNATS(Connection):
             self.reconnect_cbs.remove(cb)
         except ValueError:
             pass
+
+    @property
+    def health_status(self) -> dict:
+        """Returns current health status of the NATS connection for monitoring
+
+        Returns:
+            dict with health information including slow consumer tracking:
+                - is_connected: Whether currently connected to NATS
+                - slow_consumer_count: Total slow consumer events detected
+                - last_slow_consumer_time: Timestamp of last slow consumer (monotonic)
+                - last_slow_consumer_ago: Seconds since last slow consumer or None
+                - error_count: Total errors detected
+                - last_error: String representation of last error or None
+        """
+        is_connected = self.nc is not None and self.nc.is_connected
+
+        last_slow_ago = None
+        if self._last_slow_consumer_time is not None:
+            last_slow_ago = time.monotonic() - self._last_slow_consumer_time
+
+        return {
+            'is_connected': is_connected,
+            'slow_consumer_count': self._slow_consumer_count,
+            'last_slow_consumer_time': self._last_slow_consumer_time,
+            'last_slow_consumer_ago': last_slow_ago,
+            'error_count': self._error_count,
+            'last_error': str(self._last_error) if self._last_error else None,
+        }
 
     async def connect(self, **kwargs):
         """Connects to NATS server

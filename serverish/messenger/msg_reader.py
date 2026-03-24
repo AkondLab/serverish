@@ -799,11 +799,30 @@ class MsgReader(MsgDriver):
                 - reconnect_count: Number of times the consumer was recreated
                 - last_error: String representation of last error or None
                 - last_health_check_time: Timestamp of last health check or None
-                - consumer_exists: Whether the consumer currently exists (checks synchronously)
+                - pending_messages: Number of messages in local pending queue
+                - pending_bytes: Bytes in local pending queue
+                - connection_slow_consumers: Slow consumer count from connection (for diagnostics)
         """
         last_msg_ago = None
         if self._last_message_time is not None:
             last_msg_ago = time.monotonic() - self._last_message_time
+
+        # Get pending stats from pull subscription if available
+        pending_messages = 0
+        pending_bytes = 0
+        if self.pull_subscription is not None:
+            try:
+                pending_messages = self.pull_subscription._sub._pending_queue.qsize()
+                pending_bytes = self.pull_subscription._sub._pending_size
+            except (AttributeError, Exception):
+                pass  # Subscription internals not available
+
+        # Get slow consumer count from connection for diagnostics
+        connection_slow_consumers = 0
+        try:
+            connection_slow_consumers = self.connection._slow_consumer_count
+        except (AttributeError, Exception):
+            pass
 
         return {
             'is_open': self.is_open,
@@ -814,6 +833,9 @@ class MsgReader(MsgDriver):
             'reconnect_count': self._reconnect_count,
             'last_error': str(self._last_error) if self._last_error else None,
             'last_health_check_time': self._last_health_check_time,
+            'pending_messages': pending_messages,
+            'pending_bytes': pending_bytes,
+            'connection_slow_consumers': connection_slow_consumers,
         }
 
     async def check_consumer_exists(self) -> bool:

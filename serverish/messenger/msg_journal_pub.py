@@ -161,6 +161,19 @@ class MsgJournalPublisher(MsgPublisher):
 
 
 
+    @property
+    def health_status(self) -> dict:
+        """Returns current health status of the journal publisher for monitoring
+
+        Extends base health_status with journal-specific metrics.
+        """
+        status = super().health_status
+        status.update({
+            'active_conversations': len(self.conversations),
+        })
+        return status
+
+
 def get_journalpublisher(subject) -> MsgJournalPublisher:
     """Returns a publisher for a given subject
 

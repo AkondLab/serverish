@@ -164,12 +164,37 @@ class MsgRpcResponder(MsgDriver):
 
     @property
     def health_status(self) -> dict:
-        """Returns current health status of the RPC responder for monitoring"""
+        """Returns current health status of the RPC responder for monitoring
+
+        Note: RPC responder uses core NATS push subscription which is more
+        susceptible to slow consumer issues than JetStream pull consumers.
+        Monitor pending_messages and connection_slow_consumers for diagnostics.
+        """
+        # Get pending stats from subscription if available
+        pending_messages = 0
+        pending_bytes = 0
+        if self.subscription is not None:
+            try:
+                pending_messages = self.subscription.pending_msgs
+                pending_bytes = self.subscription.pending_bytes
+            except (AttributeError, Exception):
+                pass
+
+        # Get slow consumer count from connection
+        connection_slow_consumers = 0
+        try:
+            connection_slow_consumers = self.connection._slow_consumer_count
+        except (AttributeError, Exception):
+            pass
+
         return {
             'is_open': self.is_open,
             'subject': self.subject,
             'has_subscription': self.subscription is not None,
             'reconnect_count': self._reconnect_count,
+            'pending_messages': pending_messages,
+            'pending_bytes': pending_bytes,
+            'connection_slow_consumers': connection_slow_consumers,
         }
 
 
