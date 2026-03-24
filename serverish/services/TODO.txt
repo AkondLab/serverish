@@ -1,0 +1,34 @@
+* messenger router
+```
+router = MessengerRouter(prefix="tic.global",
+                   tags=["objects"],
+                   )
+
+@router.rpc("downlader", response_description="Add new Object", response_model=Object, status_code='')
+async def download(**kwargs):
+    await object_data.insert()
+    return object_data
+```
+* gdzie tu wrzucić domain, name, instance ?
+
+* czy FastAPI router:
+```
+router = APIRouter(prefix="/objects",
+                   tags=["objects"],
+                   dependencies=[],
+                   responses={404: {"description": "Not found"}}
+                   )
+
+@router.post("/", response_description="Add new Object", response_model=Object, status_code=status.HTTP_201_CREATED)
+async def create_object(object_data: Object = Body(...)):
+    await object_data.insert()
+    return object_data
+```
+dekoruje też metody?
+
+* Co to jest APIRouter.dependencies
+* jak dzialają annotacje parametrów metody? Dokąd idą? Jak zastępują docstring, see APIRouter na przyklad
+* Doadać FastAPI
+* Jak ladnie rozdzielić część interfacową od implementacji (ServiceController, ServerishServiceController),
+  - położenie plików etc...
+ * pydantic config dicts???
