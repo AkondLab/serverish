@@ -29,9 +29,9 @@ async def test_messenger_pub_simple_cm(messenger, nats_server):
             assert Messenger().is_open
         assert not Messenger().is_open
     finally:
-        # Always reopen — context manager closed the singleton, session fixture needs it alive
-        if not Messenger().is_open:
-            await Messenger().open(host=nats_server['host'], port=nats_server['port'])
+        # Always clean up and reopen — context manager closed the singleton
+        await Messenger().close()
+        await Messenger().open(host=nats_server['host'], port=nats_server['port'])
 
 
 @pytest.mark.nats
@@ -344,9 +344,9 @@ async def test_messenger_scheduled_open(nats_server):
         await msg.close()
         assert not msg.is_open
     finally:
-        # Always reopen for subsequent tests, even if assertions above fail
-        if not msg.is_open:
-            await msg.open(host=nats_server['host'], port=nats_server['port'])
+        # Always clean up and reopen for subsequent tests
+        await msg.close()
+        await msg.open(host=nats_server['host'], port=nats_server['port'])
 
 @pytest.mark.nats
 async def test_messenger_scheduled_open_fail(nats_server):
@@ -360,11 +360,10 @@ async def test_messenger_scheduled_open_fail(nats_server):
         with pytest.raises(TimeoutError):
             await t.wait_for(0.1)
         assert not msg.is_open
-        await msg.close()
     finally:
-        # Always reopen for subsequent tests, even if assertions above fail
-        if not msg.is_open:
-            await msg.open(host=nats_server['host'], port=nats_server['port'])
+        # Always clean up and reopen for subsequent tests
+        await msg.close()
+        await msg.open(host=nats_server['host'], port=nats_server['port'])
     assert msg.is_open
 
 
