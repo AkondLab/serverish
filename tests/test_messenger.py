@@ -349,6 +349,7 @@ async def test_messenger_scheduled_open(nats_server):
         await msg.open(host=nats_server['host'], port=nats_server['port'])
 
 @pytest.mark.nats
+@pytest.mark.timeout(20)
 async def test_messenger_scheduled_open_fail(nats_server):
     """Test that messenger will open using scheduled_open, wait for beeing open, checks if is open then  close itself"""
     msg = Messenger()
@@ -362,6 +363,7 @@ async def test_messenger_scheduled_open_fail(nats_server):
         assert not msg.is_open
     finally:
         # Always clean up and reopen for subsequent tests
+        # Needs extra time — nats client has reconnect_time_wait delay after failed connection
         await msg.close()
         await msg.open(host=nats_server['host'], port=nats_server['port'])
     assert msg.is_open
