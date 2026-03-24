@@ -3,19 +3,15 @@ import datetime
 import nats
 import pytest
 
-from tests.test_connection import ci
-from tests.test_nats import is_nats_running
 
 @pytest.mark.skip("Experimental long test, not for automated testing")
-@pytest.mark.asyncio
-@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
-@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_raw_ephemeral_consumer_expiration():
+@pytest.mark.nats
+async def test_raw_ephemeral_consumer_expiration(nats_server):
     subject = 'test.raw.consumer_expiration'
     expiration_times = []
 
     # Connect directly to NATS
-    nc = await nats.connect("nats:4222")
+    nc = await nats.connect(f"nats://{nats_server['host']}:{nats_server['port']}")
     js = nc.jetstream()
 
 
@@ -77,14 +73,12 @@ async def test_raw_ephemeral_consumer_expiration():
     await nc.close()
 
 @pytest.mark.skip("Experimental long test, not for automated testing")
-@pytest.mark.asyncio
-@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
-@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_ephemeral_consumer_with_explicit_timeout():
+@pytest.mark.nats
+async def test_ephemeral_consumer_with_explicit_timeout(nats_server):
     subject = 'test.raw.consumer_explicit_timeout'
 
     # Connect directly to NATS
-    nc = await nats.connect("nats:4222")
+    nc = await nats.connect(f"nats://{nats_server['host']}:{nats_server['port']}")
     js = nc.jetstream()
 
     # Publish a message to have something to consume
@@ -138,11 +132,9 @@ async def test_ephemeral_consumer_with_explicit_timeout():
     # Clean up
     await nc.close()
 
-@pytest.mark.asyncio
-@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
-@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_list_all_consumers():
-    nc = await nats.connect("localhost:4222")
+@pytest.mark.nats
+async def test_list_all_consumers(nats_server):
+    nc = await nats.connect(f"nats://{nats_server['host']}:{nats_server['port']}")
     js = nc.jetstream()
 
     streams = await js.streams_info()

@@ -7,14 +7,10 @@ import pytest
 from nats.aio.subscription import Subscription
 from nats.js.api import ConsumerConfig, DeliverPolicy
 
-from tests.test_connection import ci
-from tests.test_nats import is_nats_running
 
-
-# @pytest.mark.asyncio
-# @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-# async def test_js_strem_wrong_name():
-#     nc = await nats.connect("localhost")
+# @pytest.mark.nats
+# async def test_js_strem_wrong_name(nats_server):
+#     nc = await nats.connect(f"nats://{nats_server['host']}:{nats_server['port']}")
 #     js = nc.jetstream()
 #     try:
 #         await js.add_stream(name="stream.with.wrong.name")
@@ -26,11 +22,9 @@ from tests.test_nats import is_nats_running
 #     finally:
 #         await nc.close()
 
-@pytest.mark.asyncio
-@pytest.mark.skipif(ci, reason="Not working on CI")
-@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_js_strem_good_name():
-    nc = await nats.connect("localhost")
+@pytest.mark.nats
+async def test_js_strem_good_name(nats_server):
+    nc = await nats.connect(f"nats://{nats_server['host']}:{nats_server['port']}")
     js = nc.jetstream()
     try:
         await js.add_stream(name="test-goodnametest", subjects=["fooxxx"])
@@ -39,14 +33,12 @@ async def test_js_strem_good_name():
     finally:
         await nc.close()
 
-@pytest.mark.asyncio
-@pytest.mark.skipif(ci, reason="Not working on CI")
-@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_js_seq():
+@pytest.mark.nats
+async def test_js_seq(nats_server):
     """Testing NATS JetStram seq behaviour"""
     subject = "test.natsjs.test_js_seq"
     payloads = (b'dupa1', b'dupa2', b'dupa3')
-    nc = await nats.connect("localhost")
+    nc = await nats.connect(f"nats://{nats_server['host']}:{nats_server['port']}")
     js = nc.jetstream()
     stream = await js.find_stream_name_by_subject(subject)
     await js.purge_stream(stream, subject=subject)
@@ -82,10 +74,9 @@ async def test_js_seq():
     await subscription.unsubscribe()
     await nc.close()
 
-# @pytest.mark.asyncio
-# @pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-# async def test_js_many_pub():
-#     nc = await nats.connect("localhost")
+# @pytest.mark.nats
+# async def test_js_many_pub(nats_server):
+#     nc = await nats.connect(f"nats://{nats_server['host']}:{nats_server['port']}")
 #     js = nc.jetstream()
 #     tasks = []
 #     for i in range(100000):
