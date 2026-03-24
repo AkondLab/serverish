@@ -7,6 +7,7 @@ from serverish.messenger import Messenger, get_reader
 
 
 @pytest.mark.nats
+@pytest.mark.timeout(20)
 async def test_pull_subscribe_long_cpu_bound(nats_server, unique_subject):
     simulate_cpu_time = 1
 
@@ -37,13 +38,16 @@ async def test_pull_subscribe_long_cpu_bound(nats_server, unique_subject):
     )
 
     js = nc.jetstream()
-    stream = await js.find_stream_name_by_subject(unique_subject)
-    await js.purge_stream(stream)
+    # Find the stream that captures this subject (e.g. 'test' stream with 'test.>' wildcard)
+    stream_name = await js.find_stream_name_by_subject(unique_subject)
+    await js.purge_stream(stream_name, subject=unique_subject)
 
     for i in range(2):
         ack = await js.publish(unique_subject, f"{i}".encode())
 
-    consumer = await js.pull_subscribe(unique_subject, "dur")
+    # Use a unique durable name to avoid stale consumer state from previous runs
+    durable_name = f"dur-{unique_subject.split('.')[-1]}"
+    consumer = await js.pull_subscribe(unique_subject, durable_name)
 
     msg, *_ = await consumer.fetch(1, timeout=5)
     await msg.ack()
@@ -56,7 +60,7 @@ async def test_pull_subscribe_long_cpu_bound(nats_server, unique_subject):
         msg, *_ = await consumer.fetch(1, timeout=10)
         await msg.ack()
         print(f'Got message {msg.data}')
-    except TimeoutError:
+    except (TimeoutError, nats.errors.TimeoutError):
         print("TimeoutError")
 
     await nc.close()

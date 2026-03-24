@@ -41,14 +41,10 @@ def nats_server():
             return
 
     logger.info('No local NATS server found, starting testcontainer')
-    container = NatsContainer(image='nats:latest')
-    container.with_command('-js')
+    container = NatsContainer(image='nats:latest', jetstream=True)
     try:
         container.start()
-        host, port = container.get_exposed_port(4222), 4222
-        # testcontainers maps to a random host port
-        tc_host = container.get_container_host_ip()
-        tc_port = int(container.get_exposed_port(4222))
+        tc_host, tc_port = container.nats_host_and_port()
         logger.info('Started NATS testcontainer at %s:%d', tc_host, tc_port)
         yield {'host': tc_host, 'port': tc_port, 'container': container}
     finally:
@@ -57,9 +53,30 @@ def nats_server():
 
 @pytest_asyncio.fixture(scope='session', loop_scope='session')
 async def messenger(nats_server):
-    """Provide a session-scoped Messenger connected to the NATS server."""
+    """Provide a session-scoped Messenger connected to the NATS server.
+
+    When using a testcontainer (fresh NATS), creates the 'test' stream with
+    'test.>' subject wildcard to match the test subject naming convention.
+    """
     m = Messenger()
     await m.open(host=nats_server['host'], port=nats_server['port'])
+    # Ensure the 'test.>' stream exists — needed for purge, find_stream, etc.
+    # On a long-lived local NATS this stream likely already exists;
+    # on a fresh testcontainer it must be created.
+    js = m.connection.js
+    try:
+        await js.find_stream_name_by_subject('test.probe')
+    except Exception:
+        from nats.js.api import StreamConfig
+        await js.add_stream(StreamConfig(
+            name='test',
+            subjects=['test.>'],
+            storage='memory',
+            max_msgs=10000,
+        ))
+        logger.info("Created 'test' stream with 'test.>' subject wildcard")
+        # Refresh connection status so is_open reflects the new stream
+        await m.connection.update_statuses()
     yield m
     await m.close()
 
@@ -113,8 +130,7 @@ class NatsDisruptor:
 @pytest.fixture
 def nats_disruptor():
     """Provide a NatsDisruptor with its own dedicated NATS container."""
-    container = NatsContainer(image='nats:latest')
-    container.with_command('-js')
+    container = NatsContainer(image='nats:latest', jetstream=True)
     try:
         container.start()
         yield NatsDisruptor(container)
