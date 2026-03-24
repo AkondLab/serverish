@@ -25,9 +25,13 @@ this will install `nats-py` package.
 ## Plans
 - Decorators `@messenger.sub(subject)` (Web framework style)
 - Progress with automatic increment for known durations e.g. `pro_pub.update(completed=1, when=+20)`
-- Pytest fixtures for NATS on CI
+- Custom JetStream API replacing nats-py private internals access
 
 ## Changes
+* 1.7 Subscription reliability: reader auto-recovers from NATS disconnects and consumer expiry,
+  RPC responder auto-resubscribes, `health_status` property on all drivers (reader, publisher,
+  RPC responder, connection) with reconnect counts, error tracking, slow consumer detection.
+  Comprehensive test suite (194 tests) with testcontainers-based NATS fixtures.
 * 1.5 Introduces live documents (`LiveDocument`, `get_documentreader()`, `get_live_document()`) for auto-updating configuration from NATS.
 * 1.4 Contains improvements to the network problems recovery and connection tracking.
 * 1.1 Switches to `param` 2.* nad `py-nats` 1.7.*. Also, publisher may reraise exceptions or ignore them.
