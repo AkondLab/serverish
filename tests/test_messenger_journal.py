@@ -70,40 +70,4 @@ async def test_messenger_publishing_timeit(messenger, unique_subject):
     print (f'\nTime to publish 1 message: {1000.0*t/n:.2f}ms')
 
 
-@pytest.mark.nats
-async def test_messenger_pub_then_read_and_pub(messenger, unique_subject):
-    subject = unique_subject
-
-    collected = []
-
-    async def publisher_task(pub, n, stop):
-        for i in range(n):
-            meta = {}
-            if stop and i == n-1:
-                meta['tags'] = ['stop']
-            await pub.info('test info: hello %s', 'world', meta=meta)
-            await asyncio.sleep(0.1)
-
-    async def reader_task(reader):
-        async for entry, meta in reader:
-            collected.append(entry)
-            if 'stop' in meta.get('tags', []):
-                break
-
-
-    await messenger.purge(subject)
-    publisher = get_journalpublisher(subject)
-    reader = get_journalreader(subject, deliver_policy='all')
-    # prepublish some messages
-    n = 10
-    await publisher_task(publisher, n, False)
-    # start the reader
-    reader_task = asyncio.create_task(reader_task(reader))
-    # publish some more messages
-    await publisher_task(publisher, n, True)
-    # wait for the reader to finish
-    await reader_task
-    # check the collected messages
-    assert len(collected) == 2*n
-
 

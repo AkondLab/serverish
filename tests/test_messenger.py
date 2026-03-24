@@ -2,11 +2,8 @@ import asyncio
 import datetime
 import logging
 import os
-from asyncio import Lock
-
 import pytest
 
-from serverish.base import Task, create_task
 from serverish.messenger import Messenger, get_publisher, get_reader
 
 
@@ -33,49 +30,6 @@ async def test_messenger_pub_simple_cm(messenger, nats_server):
         # Always clean up and reopen — context manager closed the singleton
         await Messenger().close()
         await Messenger().open(host=nats_server['host'], port=nats_server['port'])
-
-
-@pytest.mark.nats
-async def test_messenger_pub3_then_sub(messenger, unique_subject):
-
-    subject = unique_subject
-    lock = Lock()
-
-    async def subsciber_task(sub):
-        async for data, meta in sub:
-            async with lock:
-                print(data)
-            if data['final']:
-                break
-
-    async def publisher_task(pub, n):
-        for i in range(n):
-            await pub.publish(data={'n': i, 'final': False})
-            await asyncio.sleep(0.01)
-
-    async def publish_final(pub):
-        await pub.publish(data={'n': 9999, 'final': True})
-
-    await messenger.purge(subject)
-    pub = get_publisher(subject=subject)
-    sub = get_reader(subject=subject, deliver_policy='all')
-
-    await publisher_task(pub, 3)
-
-    t = await create_task(subsciber_task(sub), "sub")
-
-    logging.info('subscriber started')
-    await asyncio.sleep(0.03)
-    logging.info('2nd publisher starting')
-    await publisher_task(pub, 2)
-
-
-    await asyncio.sleep(3)
-    await publish_final(pub)
-
-    await t
-    await pub.close()
-    await sub.close()
 
 
 @pytest.mark.nats

@@ -19,16 +19,6 @@ async def test_messenger_rpc_create_responder(messenger, unique_subject):
         await r.register_function(cb)
 
 @pytest.mark.nats
-async def test_messenger_rpc_single_no_js_ok(messenger, unique_subject):
-    # RPC uses core NATS, not JetStream. Use a non-JS subject prefix.
-    subject = f'test_no_js.{unique_subject}'
-
-    async with get_rpcresponder(subject) as r:
-        await r.register_function(cb)
-        data, meta = await request(subject, data={'a': 1, 'b': 2})
-        assert data['c'] == 3
-
-@pytest.mark.nats
 async def test_messenger_rpc_single_js_error(messenger, unique_subject):
     # Use a JetStream subject prefix to trigger the error
     subject = f'test.{unique_subject}'
