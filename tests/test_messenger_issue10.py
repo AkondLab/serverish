@@ -3,16 +3,11 @@ import time
 import nats
 import pytest
 
-from serverish.messenger import  Messenger, get_reader
-from tests.test_connection import ci
-from tests.test_nats import is_nats_running
+from serverish.messenger import Messenger, get_reader
 
 
-@pytest.mark.asyncio  # This tells pytest this test is async
-@pytest.mark.skipif(ci, reason="JetStreams Not working on CI")
-@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
-async def test_pull_subscribe_long_cpu_bound():
-    subject = 'test.nats.test_pull_subscribe_long_cpu_bound'
+@pytest.mark.nats
+async def test_pull_subscribe_long_cpu_bound(nats_server, unique_subject):
     simulate_cpu_time = 1
 
     nc = nats.NATS()
@@ -33,6 +28,7 @@ async def test_pull_subscribe_long_cpu_bound():
         print("Reconnected")
 
     await nc.connect(
+        servers=[f'nats://{nats_server["host"]}:{nats_server["port"]}'],
         error_cb=error_handler,
         disconnected_cb=disconnected_handler,
         closed_cb=closed_handler,
@@ -41,15 +37,13 @@ async def test_pull_subscribe_long_cpu_bound():
     )
 
     js = nc.jetstream()
-    stream = await js.find_stream_name_by_subject(subject)
+    stream = await js.find_stream_name_by_subject(unique_subject)
     await js.purge_stream(stream)
 
-    # await js.add_stream(name="TEST1", subjects=["foo.1", "bar"])
-
     for i in range(2):
-        ack = await js.publish(subject, f"{i}".encode())
+        ack = await js.publish(unique_subject, f"{i}".encode())
 
-    consumer = await js.pull_subscribe(subject, "dur")
+    consumer = await js.pull_subscribe(unique_subject, "dur")
 
     msg, *_ = await consumer.fetch(1, timeout=5)
     await msg.ack()
@@ -66,4 +60,3 @@ async def test_pull_subscribe_long_cpu_bound():
         print("TimeoutError")
 
     await nc.close()
-
