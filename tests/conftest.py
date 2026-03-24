@@ -141,15 +141,15 @@ def nats_disruptor():
 
 
 @pytest_asyncio.fixture(loop_scope='session')
-async def resilience_messenger(nats_disruptor):
+async def resilience_messenger(nats_disruptor, nats_server):
     """Connect Messenger singleton to a disruptor container for resilience testing.
 
     Closes the current Messenger connection, reopens it against the disruptor
     container with a short ping_interval (2s) so that the nats-py client can
     detect frozen connections quickly during pause/unpause tests.
     Creates the 'test.>' stream on the fresh container and yields the Messenger
-    instance.  Teardown closes the connection so that subsequent session-scoped
-    fixtures can re-establish the normal NATS connection.
+    instance.  Teardown closes the disruptor connection and reopens the Messenger
+    against the original session-scoped NATS server.
     """
     from serverish.connection.connection_jets import ConnectionJetStream
     from serverish.base import create_task
@@ -177,6 +177,10 @@ async def resilience_messenger(nats_disruptor):
     ))
     yield m
     await m.close()
+
+    # Reopen the Messenger against the original session-scoped NATS server
+    # so that subsequent tests using the `messenger` fixture work correctly.
+    await m.open(host=nats_server['host'], port=nats_server['port'])
 
 
 async def wait_for_healthy(driver, timeout: float = 15.0, check_interval: float = 0.3) -> dict:
