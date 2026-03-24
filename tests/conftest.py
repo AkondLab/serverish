@@ -6,8 +6,10 @@ and a NatsDisruptor for failure injection tests.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import socket
+import time
 import uuid
 
 import pytest
@@ -136,3 +138,45 @@ def nats_disruptor():
         yield NatsDisruptor(container)
     finally:
         container.stop()
+
+
+@pytest_asyncio.fixture(loop_scope='session')
+async def resilience_messenger(nats_disruptor):
+    """Connect Messenger singleton to a disruptor container for resilience testing.
+
+    Closes the current Messenger connection, reopens it against the disruptor
+    container, creates the 'test.>' stream on the fresh container, and yields
+    the Messenger instance.  Teardown closes the connection so that subsequent
+    session-scoped fixtures can re-establish the normal NATS connection.
+    """
+    m = Messenger()
+    await m.close()
+    await m.open(host=nats_disruptor.host, port=nats_disruptor.port)
+    js = m.connection.js
+    from nats.js.api import StreamConfig
+    await js.add_stream(StreamConfig(
+        name='test',
+        subjects=['test.>'],
+        storage='memory',
+        max_msgs=10000,
+    ))
+    yield m
+    await m.close()
+
+
+async def wait_for_healthy(driver, timeout: float = 15.0, check_interval: float = 0.3) -> dict:
+    """Poll driver.health_status until it indicates recovery.
+
+    Returns the final health_status dict on success.
+    Raises TimeoutError if driver does not recover within timeout.
+    """
+    start = time.monotonic()
+    last_status = {}
+    while time.monotonic() - start < timeout:
+        last_status = driver.health_status
+        if last_status.get('is_open') and not last_status.get('last_error'):
+            return last_status
+        await asyncio.sleep(check_interval)
+    raise TimeoutError(
+        f'Driver did not recover within {timeout}s. Last status: {last_status}'
+    )
