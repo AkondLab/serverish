@@ -94,6 +94,10 @@ async def reset_messenger_state(messenger):
             logger.warning('Error closing child driver during reset: %s', e)
     messenger.children_by_name.clear()
     messenger.children_names.clear()
+    # Refresh connection statuses — closing children can leave JetStream
+    # status checks stale, causing is_open to return False.
+    if messenger.conn is not None:
+        await messenger.connection.update_statuses()
 
 
 @pytest.fixture
@@ -181,6 +185,13 @@ async def resilience_messenger(nats_disruptor, nats_server):
     # Reopen the Messenger against the original session-scoped NATS server
     # so that subsequent tests using the `messenger` fixture work correctly.
     await m.open(host=nats_server['host'], port=nats_server['port'])
+    # Wait for JetStream status to settle — the initial status check may
+    # time out if the connection is not fully ready yet.
+    for _ in range(10):
+        await m.connection.update_statuses()
+        if m.is_open:
+            break
+        await asyncio.sleep(0.5)
 
 
 async def wait_for_healthy(driver, timeout: float = 15.0, check_interval: float = 0.3) -> dict:
