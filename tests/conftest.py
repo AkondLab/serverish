@@ -145,13 +145,28 @@ async def resilience_messenger(nats_disruptor):
     """Connect Messenger singleton to a disruptor container for resilience testing.
 
     Closes the current Messenger connection, reopens it against the disruptor
-    container, creates the 'test.>' stream on the fresh container, and yields
-    the Messenger instance.  Teardown closes the connection so that subsequent
-    session-scoped fixtures can re-establish the normal NATS connection.
+    container with a short ping_interval (2s) so that the nats-py client can
+    detect frozen connections quickly during pause/unpause tests.
+    Creates the 'test.>' stream on the fresh container and yields the Messenger
+    instance.  Teardown closes the connection so that subsequent session-scoped
+    fixtures can re-establish the normal NATS connection.
     """
+    from serverish.connection.connection_jets import ConnectionJetStream
+    from serverish.base import create_task
+
     m = Messenger()
     await m.close()
-    await m.open(host=nats_disruptor.host, port=nats_disruptor.port)
+
+    # Build connection manually so we can pass ping_interval to nats-py
+    conn = ConnectionJetStream(nats_disruptor.host, nats_disruptor.port)
+    await conn.update_statuses()
+    m.conn = conn
+    opener = await create_task(
+        conn.connect(ping_interval=2, max_outstanding_pings=2),
+        f'Resilience NATS connection {nats_disruptor.host}:{nats_disruptor.port}',
+    )
+    await opener.wait_for(timeout=15)
+
     js = m.connection.js
     from nats.js.api import StreamConfig
     await js.add_stream(StreamConfig(
