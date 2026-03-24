@@ -4,6 +4,10 @@ import socket
 from serverish.connection import Connection
 from serverish.base.status import StatusEnum
 
+# Deprecated: kept temporarily for backward compatibility with files not yet migrated.
+# Plan 02-02 removes all imports of this variable; once merged this line can be deleted.
+ci = False
+
 
 def internet_on():
     try:
