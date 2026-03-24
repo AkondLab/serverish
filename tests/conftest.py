@@ -64,7 +64,7 @@ async def messenger(nats_server):
     await m.close()
 
 
-@pytest_asyncio.fixture(autouse=True, scope='module', loop_scope='module')
+@pytest_asyncio.fixture(autouse=True, scope='module', loop_scope='session')
 async def reset_messenger_state(messenger):
     """Reset Messenger driver children between test modules for isolation."""
     yield
