@@ -131,7 +131,7 @@ class MsgRpcRequester(MsgDriver):
         try:
             js = self.connection.js
             stream = await js.find_stream_name_by_subject(self.subject)
-        except:
+        except Exception:
             pass
         else:
             raise MessengerRequestJetStreamSubject(self.subject)  # stream for subject found

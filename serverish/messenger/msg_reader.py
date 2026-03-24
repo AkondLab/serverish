@@ -394,11 +394,11 @@ class MsgReader(MsgDriver):
                         await asyncio.sleep(wait_time)
                     case _:  # should not be reached
                         log.error(st.fmt(f"Invalid on_connection_close value {self.error_behavior}. "
-                                         f"Raport this as a bug to the serverish maintainers!"))
-                        exit(-107) # this is not i/o error but programming error
+                                         f"Report this as a bug to the serverish maintainers!"))
+                        raise RuntimeError(f"Invalid on_connection_close value {self.error_behavior}. Report this as a bug to the serverish maintainers!")
             except Exception as e:# should never happen
-                log.error(st.fmt(f"Unhandled exception {e}. Raport this as a bug to the serverish maintainers!"))
-                exit(-108) # this is not i/o error but programming error
+                log.error(st.fmt(f"Unhandled exception {e}. Report this as a bug to the serverish maintainers!"))
+                raise RuntimeError(f"Unhandled exception {e}. Report this as a bug to the serverish maintainers!")
             st.n += 1
         # end while
 
