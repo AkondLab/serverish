@@ -8,6 +8,7 @@ without TCS dependency.
 
 Key components:
     Status          — Service status enum (OK, BUSY, ERROR, etc.)
+    StatusReport    — Dataclass for status reports with serialization
     MonitoredObject — Base class for monitored entities with hierarchical
                       status aggregation and health check loops
     create_monitor  — Factory that auto-selects NATS vs dummy implementation
@@ -23,4 +24,32 @@ Example::
             await do_work()
 """
 
-from __future__ import annotations
+from serverish.monitoring.bridge import (
+    bind_diagnostics,
+    diagnostic_to_monitoring_status,
+    diagnostics_to_status,
+    health_status_metric_cb,
+)
+from serverish.monitoring.factory import create_monitor
+from serverish.monitoring.monitored import (
+    DummyMonitoredObject,
+    MonitoredObject,
+    ReportingMonitoredObject,
+)
+from serverish.monitoring.monitored_nats import MessengerMonitoredObject
+from serverish.monitoring.status import Status, StatusReport, aggregate_status
+
+__all__ = [
+    "Status",
+    "StatusReport",
+    "aggregate_status",
+    "MonitoredObject",
+    "ReportingMonitoredObject",
+    "MessengerMonitoredObject",
+    "DummyMonitoredObject",
+    "create_monitor",
+    "bind_diagnostics",
+    "diagnostics_to_status",
+    "diagnostic_to_monitoring_status",
+    "health_status_metric_cb",
+]
