@@ -15,6 +15,7 @@ from .msg_document_read import get_documentreader, get_live_document, MsgDocumen
 from .live_document import LiveDocument
 from .logging import NatsJournalLoggingHandler
 from .msg_core_pub import MsgCorePub, get_corepublisher
+from .msg_core_read import MsgCoreReader, get_corereader
 from .msg_core_sub import MsgCoreSub, get_coresubscriber
 from .msg_cmd_pub import MsgCommandPublisher, get_commandpublisher
 from .msg_cmd_sub import MsgCommandSubscriber, get_commandsubscriber

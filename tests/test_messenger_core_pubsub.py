@@ -10,10 +10,12 @@ import pytest
 from serverish.messenger import (
     Messenger,
     MsgCorePub,
+    MsgCoreReader,
     MsgCoreSub,
     MsgCommandPublisher,
     MsgCommandSubscriber,
     get_corepublisher,
+    get_corereader,
     get_coresubscriber,
     get_commandpublisher,
     get_commandsubscriber,
@@ -42,9 +44,19 @@ def test_get_corepublisher_returns_instance():
     assert isinstance(pub, MsgCorePub)
 
 
+def test_get_corereader_returns_instance():
+    reader = get_corereader("svc.command.test")
+    assert isinstance(reader, MsgCoreReader)
+
+
 def test_get_coresubscriber_returns_instance():
     sub = get_coresubscriber("svc.command.test")
     assert isinstance(sub, MsgCoreSub)
+
+
+def test_coresubscriber_is_corereader():
+    sub = get_coresubscriber("svc.command.test")
+    assert isinstance(sub, MsgCoreReader)
 
 
 def test_get_commandpublisher_returns_instance():
@@ -241,3 +253,55 @@ async def test_core_sub_context_manager():
 
     assert len(received) == 1
     assert received[0]["seq"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(ci, reason="NATS not available on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_core_reader_async_iterator():
+    """MsgCoreReader exposes an async iterator that yields (data, meta) tuples."""
+    subject = _subject("test_core_reader_async_iterator")
+    N = 3
+    received: list[dict] = []
+    done = asyncio.Event()
+
+    async with Messenger().context(host="localhost", port=4222):
+        pub = get_corepublisher(subject)
+        reader = get_corereader(subject)
+        async with pub, reader:
+            # Consume in a background task so we can also publish
+            async def _consume():
+                async for data, meta in reader:
+                    received.append(data)
+                    if len(received) >= N:
+                        done.set()
+                        break
+
+            task = asyncio.ensure_future(_consume())
+            await asyncio.sleep(0.05)
+            for i in range(N):
+                await pub.publish(data={"n": i})
+            await asyncio.wait_for(done.wait(), timeout=5)
+            task.cancel()
+
+    assert len(received) == N
+    assert [d["n"] for d in received] == list(range(N))
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(ci, reason="NATS not available on CI")
+@pytest.mark.skipif(not is_nats_running(), reason="requires nats server on localhost:4222")
+async def test_core_reader_read_next():
+    """MsgCoreReader.read_next() returns a single (data, meta) pair."""
+    subject = _subject("test_core_reader_read_next")
+
+    async with Messenger().context(host="localhost", port=4222):
+        pub = get_corepublisher(subject)
+        reader = get_corereader(subject)
+        async with pub, reader:
+            await asyncio.sleep(0.05)
+            await pub.publish(data={"key": "value"})
+            data, meta = await asyncio.wait_for(reader.read_next(), timeout=3)
+
+    assert data["key"] == "value"
+    assert "id" in meta

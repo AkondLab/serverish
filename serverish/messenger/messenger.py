@@ -572,6 +572,21 @@ class Messenger(Singleton):
         return MsgCorePub(subject=subject, parent=Messenger())
 
     @staticmethod
+    def get_corereader(subject: str) -> 'MsgCoreReader':
+        """Returns a core NATS reader (async iterator) for a given subject (no JetStream)
+
+        Use this for subjects that are not backed by a JetStream stream.
+
+        Args:
+            subject (str): subject to subscribe to
+
+        Returns:
+            MsgCoreReader: a core-NATS async iterator for the given subject
+        """
+        from serverish.messenger.msg_core_read import MsgCoreReader
+        return MsgCoreReader(subject=subject, parent=Messenger())
+
+    @staticmethod
     def get_coresubscriber(subject: str) -> 'MsgCoreSub':
         """Returns a core NATS subscriber for a given subject (no JetStream)
 
