@@ -1,132 +1,225 @@
+"""Unified status types for serverish.
+
+Provides a single Status enum and StatusReport dataclass used by every layer
+of the library: diagnostics (HasStatuses), connections, monitoring, and tasks.
+
+Status severity precedence (highest wins in aggregation):
+    FAILED > ERROR > WARNING > DEGRADED > STARTUP > SHUTDOWN > BUSY > IDLE > OK > UNKNOWN
+
+This module replaces the former dual-system design where serverish.base had a
+4-value StatusEnum and serverish.monitoring had a separate 10-value Status enum.
+The two are now unified here.
+"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
-try:
-    from enum import StrEnum
-except ImportError:
-    class StrEnum(str, Enum):
-        pass
+from serverish.base.datetime import dt_from_array, dt_utcnow_array
 
 
-class StatusEnum(StrEnum):
-    """Status enum
+class Status(Enum):
+    """Component/service status.
 
-    Statuses:
-        na: not applicable, does not deduce further statuses
-        ok: ok, may be used to deduce further `ok` statuses
-        fail: fail, does not deduce further statuses
-        disabled: disabled, may be used to deduce further `disabled` statuses
+    Ordered by severity (highest wins in aggregation):
+    FAILED > ERROR > WARNING > DEGRADED > STARTUP > SHUTDOWN > BUSY > IDLE > OK > UNKNOWN
+
+    Properties:
+        is_healthy: True for OK, IDLE, BUSY, DEGRADED, WARNING
+        is_operational: True for STARTUP, OK, IDLE, BUSY, DEGRADED, WARNING
     """
-    na = "na"
-    ok = "ok"
-    fail = 'fail'
-    disabled = 'disabled'
+    UNKNOWN = "unknown"
+    STARTUP = "startup"
+    OK = "ok"
+    IDLE = "idle"
+    BUSY = "busy"
+    DEGRADED = "degraded"
+    WARNING = "warning"
+    ERROR = "error"
+    SHUTDOWN = "shutdown"
+    FAILED = "failed"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @property
+    def is_healthy(self) -> bool:
+        """True for OK, IDLE, BUSY, DEGRADED, WARNING."""
+        return self in _HEALTHY_STATUSES
+
+    @property
+    def is_operational(self) -> bool:
+        """True for STARTUP, OK, IDLE, BUSY, DEGRADED, WARNING."""
+        return self in _OPERATIONAL_STATUSES
 
 
+_HEALTHY_STATUSES = frozenset({
+    Status.OK, Status.IDLE, Status.BUSY, Status.DEGRADED, Status.WARNING,
+})
+
+_OPERATIONAL_STATUSES = frozenset({
+    Status.STARTUP, Status.OK, Status.IDLE, Status.BUSY,
+    Status.DEGRADED, Status.WARNING,
+})
+
+_SEVERITY_RANK: dict[Status, int] = {
+    Status.UNKNOWN: 0,
+    Status.OK: 1,
+    Status.IDLE: 2,
+    Status.BUSY: 3,
+    Status.SHUTDOWN: 4,
+    Status.STARTUP: 5,
+    Status.DEGRADED: 6,
+    Status.WARNING: 7,
+    Status.ERROR: 8,
+    Status.FAILED: 9,
+}
 
 
 @dataclass
-class Status:
-    """Status of the resource
+class StatusReport:
+    """Status report for any component.
 
-    Attributes:
-        status (StatusEnum): Status
-        msg (str): Status message
-        deduce_other (bool): Whether to deduce other statuses without checking from this one
+    Used both as a diagnostic check result (with deduce_other for deduction
+    chains in HasStatuses) and as a rich status report (with details, children,
+    and metrics for monitoring).
+
+    Args:
+        name: Component name
+        status: Current status
+        message: Optional human-readable message
+        timestamp: UTC timestamp as 7-element array [Y, M, D, h, m, s, us]
+        details: Optional dict with children reports and metrics
+        parent: Optional parent name for hierarchical grouping
+        deduce_other: If True, subsequent diagnostic checks are deduced from this result
     """
-    status: StatusEnum = StatusEnum.na
-    msg: str = None
-    deduce_other: bool = True
+    name: str
+    status: Status
+    message: str | None = None
+    timestamp: list[int] | None = None
+    details: dict[str, Any] | None = None
+    parent: str | None = None
+    deduce_other: bool = False
 
-    # Helpers for easy status construction
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = dt_utcnow_array()
+
+    def get_timestamp_dt(self):
+        """Get timestamp as datetime object."""
+        if self.timestamp is None:
+            return None
+        return dt_from_array(self.timestamp)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        result: dict[str, Any] = {
+            "name": self.name,
+            "status": self.status.value,
+            "timestamp": self.timestamp,
+        }
+        if self.message:
+            result["message"] = self.message
+        if self.details:
+            result["details"] = self.details
+        if self.parent:
+            result["parent"] = self.parent
+        if self.deduce_other:
+            result["deduce_other"] = True
+        return result
+
     @classmethod
-    def new_na(cls, msg: str = None, deduce_other: bool = False) -> Status:
-        """Returns Status object with status 'na' (not applicable)
+    def from_dict(cls, data: dict[str, Any]) -> StatusReport:
+        """Create from dictionary.
 
-        Args:
-            msg (str, optional): Status message. Defaults to None.
-            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
-                                           Defaults to False.
-
-        Returns:
-            Status: Status object
+        Raises:
+            KeyError: If required fields 'name' or 'status' are missing
+            ValueError: If 'status' value is not a valid Status enum member
         """
-        return cls(StatusEnum.na, msg, deduce_other=deduce_other)
+        if "name" not in data or "status" not in data:
+            missing = [k for k in ("name", "status") if k not in data]
+            raise KeyError(f"StatusReport.from_dict missing required fields: {missing}")
+        return cls(
+            name=data["name"],
+            status=Status(data["status"]),
+            message=data.get("message"),
+            timestamp=data.get("timestamp"),
+            details=data.get("details"),
+            parent=data.get("parent"),
+            deduce_other=data.get("deduce_other", False),
+        )
+
+    @staticmethod
+    def ok(msg: str | None = None, deduce_other: bool = True) -> StatusReport:
+        """Create an OK status report. Defaults deduce_other=True."""
+        return StatusReport(name="", status=Status.OK, message=msg, deduce_other=deduce_other)
+
+    @staticmethod
+    def error(msg: str | None = None, deduce_other: bool = False) -> StatusReport:
+        """Create an ERROR status report."""
+        return StatusReport(name="", status=Status.ERROR, message=msg, deduce_other=deduce_other)
+
+    @staticmethod
+    def failed(msg: str | None = None, deduce_other: bool = False) -> StatusReport:
+        """Create a FAILED status report."""
+        return StatusReport(name="", status=Status.FAILED, message=msg, deduce_other=deduce_other)
+
+    @staticmethod
+    def unknown(msg: str | None = None, deduce_other: bool = False) -> StatusReport:
+        """Create an UNKNOWN status report."""
+        return StatusReport(name="", status=Status.UNKNOWN, message=msg, deduce_other=deduce_other)
+
+    @staticmethod
+    def shutdown(msg: str | None = None, deduce_other: bool = False) -> StatusReport:
+        """Create a SHUTDOWN status report."""
+        return StatusReport(name="", status=Status.SHUTDOWN, message=msg, deduce_other=deduce_other)
+
+    @staticmethod
+    def degraded(msg: str | None = None, deduce_other: bool = False) -> StatusReport:
+        """Create a DEGRADED status report."""
+        return StatusReport(name="", status=Status.DEGRADED, message=msg, deduce_other=deduce_other)
+
+    @staticmethod
+    def warning(msg: str | None = None, deduce_other: bool = False) -> StatusReport:
+        """Create a WARNING status report."""
+        return StatusReport(name="", status=Status.WARNING, message=msg, deduce_other=deduce_other)
 
     @classmethod
-    def new_ok(cls, msg: str = None, deduce_other: bool = True) -> Status:
-        """Returns Status object with status 'ok'
+    def deduced(cls, source: StatusReport, msg: str | None = None) -> StatusReport:
+        """Create a status report deduced from another result.
+
+        Used by HasStatuses diagnostic chains when a prior check's
+        deduce_other=True allows skipping subsequent checks.
 
         Args:
-            msg (str, optional): Status message. Defaults to None.
-            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
-                                           Defaults to True.
-
-        Returns:
-            Status: Status object
-        """
-        return cls(StatusEnum.ok, msg, deduce_other=deduce_other)
-
-    @classmethod
-    def new_fail(cls, msg: str = None, deduce_other: bool = False) -> Status:
-        """Returns Status object with status 'fail'
-
-        Args:
-            msg (str, optional): Status message. Defaults to None.
-            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
-                                           Defaults to False.
-
-        Returns:
-            Status: Status object
-        """
-        return cls(StatusEnum.fail, msg, deduce_other=deduce_other)
-
-    @classmethod
-    def new_disabled(cls, msg: str = None, deduce_other: bool = False) -> Status:
-        """Returns Status object with status 'disabled'
-
-        Args:
-            msg (str, optional): Status message. Defaults to None.
-            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
-                                           Defaults to False.
-
-        Returns:
-            Status: Status object
-        """
-        return cls(StatusEnum.disabled, msg, deduce_other=deduce_other)
-
-    @classmethod
-    def deduced(cls, source: Status, msg: str = None):
-        """Returns Status object with status deduced  from other
-
-        Args:
-            source (Status): Source status
-            msg (str, optional): Status message. Defaults to 'Deduced form {src.name}'.
-            deduce_other (bool, optional): Whether to deduce other statuses without checking from this one.
-                                           Defaults to False.
-
-        Returns:
-            Status: Status object
+            source: The StatusReport to deduce from
+            msg: Optional message (defaults to 'Deduced')
         """
         if msg is None:
-            msg = f'Deduced'
-        return cls(source.status, msg)
-
-    def __eq__(self, other):
-        if isinstance(other, (StatusEnum, str)):
-            return self.status == other
-        elif isinstance(other, Status):
-            return self.status == other.status
-        else:
-            return False
-
-    def __str__(self):
-        return f'{self.status}'
-
-    def __repr__(self):
-        return f"[{self.status.name}] {self.msg})"
+            msg = "Deduced"
+        return cls(
+            name="",
+            status=source.status,
+            message=msg,
+            deduce_other=False,
+        )
 
 
-    def __bool__(self):
-        return self.status == StatusEnum.ok
+def aggregate_status(reports: list[StatusReport]) -> Status:
+    """Aggregate multiple status reports into single status.
+
+    Returns the most severe status from the collection, following
+    severity precedence:
+    FAILED > ERROR > WARNING > DEGRADED > STARTUP > SHUTDOWN > BUSY > IDLE > OK > UNKNOWN
+
+    Args:
+        reports: List of StatusReport instances
+
+    Returns:
+        The most severe Status from the reports, or Status.UNKNOWN if empty
+    """
+    if not reports:
+        return Status.UNKNOWN
+    return max((r.status for r in reports), key=lambda s: _SEVERITY_RANK[s])

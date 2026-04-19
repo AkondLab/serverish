@@ -12,7 +12,7 @@ import nats.errors
 from nats.aio.client import Client as NATS
 
 from serverish.connection import Connection
-from serverish.base.status import Status
+from serverish.base.status import StatusReport
 
 _logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -180,28 +180,28 @@ class ConnectionNATS(Connection):
         await self.disconnect()
 
 
-    def diagnose_initialized(self) -> Status:
+    def diagnose_initialized(self) -> StatusReport:
         """Diagnoses initialization
 
         Returns:
             Status: Status object
         """
         if self.nc is None:
-            return Status.new_fail(msg='Not initialized')
-        return Status.new_ok(msg='Initialized', deduce_other=False)
+            return StatusReport.error(msg='Not initialized')
+        return StatusReport.ok(msg='Initialized', deduce_other=False)
 
-    def diagnose_nats_connected(self) -> Status:
+    def diagnose_nats_connected(self) -> StatusReport:
         """Diagnoses NATS connection
         Returns:
             Status: Status object, named 'nats'
         """
         if self.nc is None:
-            return Status.new_fail(msg='Not initialized')
+            return StatusReport.error(msg='Not initialized')
         if not self.nc.is_connected:
-            return Status.new_fail(msg='Not connected')
-        return Status.new_ok(msg='Connected')
+            return StatusReport.error(msg='Not connected')
+        return StatusReport.ok(msg='Connected')
 
-    async def diagnose_nats_server_port(self) -> Status:
+    async def diagnose_nats_server_port(self) -> StatusReport:
         async def _check_port(host, port) -> Tuple[str, str | None]:
             loop = asyncio.get_event_loop()
             try:
@@ -219,7 +219,7 @@ class ConnectionNATS(Connection):
                 return f"{host}:{port}", f'Error: {e}'
 
         if len(self.host) == 0:
-            return Status.new_fail(msg='No host specified')
+            return StatusReport.error(msg='No host specified')
 
         tasks = [_check_port(host, port) for host, port in zip(self.host, self.port)]
         results = await asyncio.gather(*tasks)
@@ -228,24 +228,24 @@ class ConnectionNATS(Connection):
         failed_connections = [host_port for host_port, status in results if status is not None]
 
         if len(successful_connections) == len(tasks):
-            return Status.new_ok(msg=f'Connected on all {len(tasks)} addresses: {", ".join(successful_connections)}')
+            return StatusReport.ok(msg=f'Connected on all {len(tasks)} addresses: {", ".join(successful_connections)}')
         elif len(successful_connections) > 0:
-            return Status.new_ok(msg=f'Connected to {len(successful_connections)} of {len(tasks)}. '
+            return StatusReport.ok(msg=f'Connected to {len(successful_connections)} of {len(tasks)}. '
                                        f'Failed to connect to: {", ".join(failed_connections)}')
         else:
-            return Status.new_fail(msg=f'Failed to connect to any of {len(tasks)} addresses: '
+            return StatusReport.error(msg=f'Failed to connect to any of {len(tasks)} addresses: '
                                        f'{", ".join(failed_connections)}')
 
-    async def diagnose_nats_server_op(self) -> Status:
+    async def diagnose_nats_server_op(self) -> StatusReport:
         if self.nc is None:
-            return Status.new_fail(msg='Not initialized')
+            return StatusReport.error(msg='Not initialized')
         if not self.nc.is_connected:
-            return Status.new_fail(msg='Not connected')
+            return StatusReport.error(msg='Not connected')
         try:
             await self.nc.publish('test.ping', b'')
-            return Status.new_ok(msg='Operational')
+            return StatusReport.ok(msg='Operational')
         except Exception as e:
-            return Status.new_fail(msg=f'Not operational: {e}')
+            return StatusReport.error(msg=f'Not operational: {e}')
 
 
 

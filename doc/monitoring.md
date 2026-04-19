@@ -2,15 +2,15 @@
 
 ## Overview
 
-Serverish provides two complementary status/health systems at different abstraction levels:
+Serverish provides a unified status and monitoring system built on a single set of types in `serverish.base.status`:
 
-**Infrastructure diagnostics** (`serverish.base`) — "Are my connections working?"
-Low-level, technical, per-component. Checks if NATS is connected, DNS resolves, messages are flowing.
+- **`Status` enum** — 10 service states (OK, BUSY, ERROR, etc.) with `is_healthy` and `is_operational` properties
+- **`StatusReport` dataclass** — Status report with message, timestamp, details, and serialization
+- **`aggregate_status()`** — Worst-status-wins aggregation across multiple reports
 
-**Service monitoring** (`serverish.monitoring`) — "What is my service doing?"
-High-level, operational, service-wide. Tracks service status (OK, BUSY, ERROR), sends heartbeats, aggregates children, reports metrics.
+These types are used everywhere: infrastructure diagnostics (`HasStatuses.diagnose()`), connection health checks, task tracking, and service-level monitoring.
 
-A bridge module connects both systems so a single `MonitoredObject` can automatically reflect infrastructure health while tracking service-level state.
+The monitoring module (`serverish.monitoring`) adds service-level capabilities on top: hierarchical parent-child monitoring, heartbeats, health check loops, and NATS publishing.
 
 ## Architecture
 
@@ -42,10 +42,11 @@ A bridge module connects both systems so a single `MonitoredObject` can automati
          ┌────────────▼───────────────┐
          │  serverish.base            │
          │  HasStatuses / Connection  │
-         │  Publisher.health_status   │
-         │  Reader.health_status      │
+         │  Status / StatusReport     │
          └────────────────────────────┘
 ```
+
+All layers share the same `Status` enum and `StatusReport` dataclass from `serverish.base.status`. No translation between type systems is needed.
 
 ## Quick Start
 
@@ -106,10 +107,10 @@ async def main():
         publisher = get_publisher('telemetry.weather')
         reader = get_reader('raw.sensors')
 
-        # Bridge: infrastructure diagnostics → monitoring healthcheck
+        # Bridge: infrastructure diagnostics -> monitoring healthcheck
         bind_diagnostics(monitor, messenger.conn)
 
-        # Bridge: publisher/reader health → monitoring metrics
+        # Bridge: publisher/reader health -> monitoring metrics
         monitor.add_metric_cb(health_status_metric_cb(publisher))
         monitor.add_metric_cb(health_status_metric_cb(reader))
 
@@ -117,7 +118,7 @@ async def main():
             monitor.set_status(Status.OK, "Pipeline running")
             # Now the monitor:
             # - Sends heartbeats every 10s
-            # - Runs healthcheck every 30s (including NATS diagnostics)
+            # - Runs healthcheck every 30s (including connection diagnostics)
             # - Includes publisher/reader stats in status reports
             # - Tracks BUSY/IDLE based on task execution
             await run_pipeline()
@@ -143,7 +144,41 @@ Properties:
 - `status.is_operational` — True for all of the above plus STARTUP
 
 Aggregation precedence (highest wins):
-FAILED > ERROR > WARNING > DEGRADED > STARTUP > SHUTDOWN > BUSY > IDLE > OK
+FAILED > ERROR > WARNING > DEGRADED > STARTUP > SHUTDOWN > BUSY > IDLE > OK > UNKNOWN
+
+## StatusReport
+
+```python
+from serverish.base import StatusReport, Status
+
+# Factory methods (for diagnostic check results)
+report = StatusReport.ok("All good")           # deduce_other=True by default
+report = StatusReport.error("Connection lost")  # deduce_other=False
+report = StatusReport.failed("Fatal crash")
+report = StatusReport.unknown("Not checked")
+report = StatusReport.shutdown("Disabled")
+report = StatusReport.degraded("Slow response")
+report = StatusReport.warning("High memory")
+
+# Full constructor (for rich status reports)
+report = StatusReport(
+    name="weather_collector",
+    status=Status.OK,
+    message="Collecting data",
+    details={"metrics": {"publish_count": 42}},
+    parent="launcher.server01",
+)
+
+# Serialization
+d = report.to_dict()
+report2 = StatusReport.from_dict(d)
+
+# Explicit status checks (no __bool__, no magic __eq__)
+if report.status.is_healthy:
+    print("Healthy")
+if report.status == Status.OK:
+    print("Exactly OK")
+```
 
 ## Hierarchical Monitoring
 
@@ -227,7 +262,7 @@ Metrics appear in `report.details["metrics"]`.
 
 When using `MessengerMonitoredObject` (created by `create_monitor()` when Messenger is open):
 
-**Status updates** → `svc.status.<name>` (on every status change)
+**Status updates** -> `svc.status.<name>` (on every status change)
 ```json
 {
     "name": "weather_collector",
@@ -239,13 +274,13 @@ When using `MessengerMonitoredObject` (created by `create_monitor()` when Messen
     "hostname": "server01.lan",
     "details": {
         "own_status": "ok",
-        "children": [...],
+        "children": [],
         "metrics": {"publish_count": 42, "pending_messages": 0}
     }
 }
 ```
 
-**Heartbeats** → `svc.heartbeat.<name>` (every 10s, configurable)
+**Heartbeats** -> `svc.heartbeat.<name>` (every 10s, configurable)
 ```json
 {
     "service_id": "weather_collector",
@@ -254,25 +289,15 @@ When using `MessengerMonitoredObject` (created by `create_monitor()` when Messen
 }
 ```
 
-## Bridge: Connecting Infrastructure to Service Monitoring
+## Bridge: Connecting Diagnostics to Monitoring
 
-Serverish has two status systems — the bridge connects them:
+The bridge module connects `HasStatuses.diagnose()` results to `MonitoredObject` healthcheck callbacks. Since both systems use the same `Status` enum and `StatusReport` dataclass, no type translation is needed.
 
 | Function | What it does |
 |----------|-------------|
-| `bind_diagnostics(monitor, connection)` | Runs `connection.diagnose()` in healthcheck loop, translates fail→ERROR |
+| `bind_diagnostics(monitor, connection)` | Runs `connection.diagnose()` in healthcheck loop, maps failures to ERROR |
 | `health_status_metric_cb(component)` | Wraps `component.health_status` dict as a metric callback |
-| `diagnostics_to_status(results)` | Converts `HasStatuses.diagnose()` dict to single `monitoring.Status` |
-| `diagnostic_to_monitoring_status(diag)` | Converts single `base.Status` to `monitoring.Status` |
-
-Translation table:
-
-| `base.StatusEnum` | `monitoring.Status` |
-|-------------------|---------------------|
-| ok | OK |
-| fail | ERROR |
-| disabled | SHUTDOWN |
-| na | UNKNOWN |
+| `diagnostics_to_status(results)` | Converts `HasStatuses.diagnose()` dict to single `Status` |
 
 ## Graceful Degradation
 
@@ -301,7 +326,7 @@ monitor = await create_monitor(
 
 ## TCS Compatibility
 
-The monitoring module is extracted from `ocabox-tcs`. Class names, method signatures, and constructor arguments are identical, so TCS can switch to importing from `serverish.monitoring` with minimal changes:
+The monitoring module is extracted from `ocabox-tcs`. Class names, method signatures, and constructor arguments are compatible, so TCS can switch to importing from `serverish.monitoring` with minimal changes:
 
 ```python
 # Before (in TCS)

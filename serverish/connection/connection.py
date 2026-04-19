@@ -7,7 +7,7 @@ from typing import Iterable
 
 import param
 from serverish.base.hasstatuses import HasStatuses
-from serverish.base.status import Status
+from serverish.base.status import StatusReport
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -70,7 +70,7 @@ class Connection(HasStatuses):
                 return f'{h}: {e}'
 
 
-    async def diagnose_dns(self) -> Status:
+    async def diagnose_dns(self) -> StatusReport:
         """ Diagnoses DNS connection
 
         Returns:
@@ -79,11 +79,11 @@ class Connection(HasStatuses):
         try:
             import aiodns
         except ImportError:
-            return Status.new_na(msg='aiodns not installed, skipping DNS check')
+            return StatusReport.unknown(msg='aiodns not installed, skipping DNS check')
 
 
         if len(self.host) == 0:
-            return Status.new_na(msg='No hosts to check DNS for')
+            return StatusReport.unknown(msg='No hosts to check DNS for')
 
         resolver = aiodns.DNSResolver()
         tasks = [self._check_host(resolver, h) for h in self.host if not self.is_ip(h)]
@@ -93,16 +93,16 @@ class Connection(HasStatuses):
         failed = [res for res in results if res is not None]
 
         if checked == 0:
-            return Status.new_na(msg='No DNS names to check')
+            return StatusReport.unknown(msg='No DNS names to check')
         elif len(failed) == checked:
-            return Status.new_fail(msg=f'DNS check failed for all {checked} names: {", ".join(failed)}')
+            return StatusReport.error(msg=f'DNS check failed for all {checked} names: {", ".join(failed)}')
         elif len(failed) > 0:
-            return Status.new_ok(msg=f'DNS check ok for {checked - len(failed)} of {checked} names, '
+            return StatusReport.ok(msg=f'DNS check ok for {checked - len(failed)} of {checked} names, '
                                      f'but failed for: {", ".join(failed)}')
         else:
-            return Status.new_ok(msg=f'DNS check ok for all {checked} names')
+            return StatusReport.ok(msg=f'DNS check ok for all {checked} names')
 
-    async def diagnose_ping(self) -> Status:
+    async def diagnose_ping(self) -> StatusReport:
         """Diagnoses ping
 
         Returns:
@@ -118,7 +118,7 @@ class Connection(HasStatuses):
             return (host, proc.returncode)
 
         if len(self.host) == 0:
-            return Status.new_na(msg='No hosts to ping')
+            return StatusReport.unknown(msg='No hosts to ping')
 
         tasks = [_ping_host(host) for host in self.host]
         results = await asyncio.gather(*tasks)
@@ -127,12 +127,12 @@ class Connection(HasStatuses):
         failed_pings = [host for host, returncode in results if returncode != 0]
 
         if len(successful_pings) == len(self.host):
-            return Status.new_ok(msg=f'Ping successful for all hosts: {", ".join(successful_pings)}')
+            return StatusReport.ok(msg=f'Ping successful for all hosts: {", ".join(successful_pings)}')
         elif len(successful_pings) > 0:
-            return Status.new_ok(msg=f'Ping ok for {len(successful_pings)} of {len(self.host)} hosts, '
+            return StatusReport.ok(msg=f'Ping ok for {len(successful_pings)} of {len(self.host)} hosts, '
                                      f'but failed for: {", ".join(failed_pings)}')
         else:
-            return Status.new_fail(msg=f'Ping failed for all {len(self.host)} hosts: {", ".join(failed_pings)}')
+            return StatusReport.error(msg=f'Ping failed for all {len(self.host)} hosts: {", ".join(failed_pings)}')
 
     def create_urls(self, protocol: str='http', path: str='') -> list[str]:
         """Creates list of URLs from host and port

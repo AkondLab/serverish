@@ -9,7 +9,7 @@ from nats.js import JetStreamContext
 import param
 
 from serverish.connection.connection_nats import ConnectionNATS
-from serverish.base.status import Status
+from serverish.base.status import StatusReport
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -148,7 +148,7 @@ class ConnectionJetStream(ConnectionNATS):
         await js.update_stream(config=cfg)
 
 
-    async def diagnose_stream_config(self) -> Status:
+    async def diagnose_stream_config(self) -> StatusReport:
         """Diagnoses stream configuration
 
         Returns:
@@ -160,12 +160,12 @@ class ConnectionJetStream(ConnectionNATS):
         try:
             for s in self.streams:
                 if re.match(r'^[a-zA-Z0-9_-]+$', s) is None:
-                    return Status.new_fail(msg=f'Invalid stream name {s}')
+                    return StatusReport.error(msg=f'Invalid stream name {s}')
         except TypeError:
-            return Status.new_fail(msg='Streams config invalid, can not iterate over it')
-        return Status.new_ok(msg='Streams config valid', deduce_other=False)
+            return StatusReport.error(msg='Streams config invalid, can not iterate over it')
+        return StatusReport.ok(msg='Streams config valid', deduce_other=False)
 
-    async def diagnose_jetstream_init(self) -> Status:
+    async def diagnose_jetstream_init(self) -> StatusReport:
         """Diagnoses JetStream connection
 
         Returns:
@@ -173,11 +173,11 @@ class ConnectionJetStream(ConnectionNATS):
         """
         js: JetStreamContext = self.js
         if js is None:
-            return Status.new_fail(msg='Not initialized')
+            return StatusReport.error(msg='Not initialized')
         else:
-            return Status.new_ok(msg='Initialized', deduce_other=False)
+            return StatusReport.ok(msg='Initialized', deduce_other=False)
 
-    async def diagnose_stream_exists(self) -> Status:
+    async def diagnose_stream_exists(self) -> StatusReport:
         """Diagnoses any stream existence
 
         Returns:
@@ -185,16 +185,16 @@ class ConnectionJetStream(ConnectionNATS):
         """
         js: JetStreamContext = self.js
         if js is None:
-            return Status.new_fail(msg='Not initialized')
+            return StatusReport.error(msg='Not initialized')
         try:
             info = await js.streams_info()
             if not info:
-                return Status.new_fail(msg='Zero streams in NATS')
+                return StatusReport.error(msg='Zero streams in NATS')
         except Exception as e:
-            return Status.new_fail(msg=f'Error getting streams info: {e}')
-        return Status.new_ok(msg='Stream(s) exist')
+            return StatusReport.error(msg=f'Error getting streams info: {e}')
+        return StatusReport.ok(msg='Stream(s) exist')
 
-    async def diagnose_stream_subjects(self) -> Status:
+    async def diagnose_stream_subjects(self) -> StatusReport:
         """Diagnoses streams for declared subjects
 
         Returns:
@@ -202,15 +202,15 @@ class ConnectionJetStream(ConnectionNATS):
         """
         js: JetStreamContext = self.js
         if js is None:
-            return Status.new_fail(msg='Not initialized')
+            return StatusReport.error(msg='Not initialized')
         if not self.declared_subjects:
-            return Status.new_na(msg='No declared subjects')
+            return StatusReport.unknown(msg='No declared subjects')
         try:
             for subject in self.declared_subjects:
                 try:
                     await js.find_stream_name_by_subject(subject)
                 except (LookupError, TypeError) as e:  # That's what nats.py throws...
-                    return Status.new_fail(msg=f'Stream for {subject} not found')
+                    return StatusReport.error(msg=f'Stream for {subject} not found')
         except Exception as e:
-            return Status.new_fail(msg=f'Error getting streams info: {e}')
-        return Status.new_ok(msg='All declared subjects have streams')
+            return StatusReport.error(msg=f'Error getting streams info: {e}')
+        return StatusReport.ok(msg='All declared subjects have streams')

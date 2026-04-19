@@ -5,7 +5,7 @@ import pytest
 
 from serverish.connection.connection_jets import ConnectionJetStream
 from serverish.connection.connection_nats import ConnectionNATS
-from serverish.base.status import StatusEnum
+from serverish.base.status import Status
 
 
 @pytest.mark.nats
@@ -48,7 +48,7 @@ async def test_nats(nats_server):
     async with c:
         codes = await c.diagnose(no_deduce=True)
         for s in codes.values():
-            assert s == StatusEnum.ok
+            assert s.status == Status.OK
 
 @pytest.mark.nats
 async def test_jests(nats_server):
@@ -56,7 +56,7 @@ async def test_jests(nats_server):
     async with c:
         codes = await c.diagnose(no_deduce=True)
         for s in codes.values():
-            assert s in [StatusEnum.ok, StatusEnum.na]
+            assert s.status in (Status.OK, Status.UNKNOWN)
 
 @pytest.mark.nats
 @pytest.mark.xfail(reason="This test is expected to fail on dot in stream name")
@@ -65,7 +65,7 @@ async def test_jests_wrongname(nats_server):
     async with c:
         codes = await c.diagnose(no_deduce=True)
         for s in codes.values():
-            assert s == 'ok'
+            assert s.status == Status.OK
 
 @pytest.mark.nats
 async def test_nats_publish(nats_server):

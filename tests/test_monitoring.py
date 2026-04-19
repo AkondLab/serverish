@@ -11,7 +11,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from serverish.base.status import Status as DiagStatus, StatusEnum
+from serverish.base.status import Status, StatusReport
 from serverish.monitoring import (
     Status,
     StatusReport,
@@ -21,7 +21,6 @@ from serverish.monitoring import (
     MessengerMonitoredObject,
     DummyMonitoredObject,
     create_monitor,
-    diagnostic_to_monitoring_status,
     diagnostics_to_status,
     health_status_metric_cb,
     bind_diagnostics,
@@ -485,45 +484,36 @@ class TestCreateMonitor:
 # --- Bridge (base ↔ monitoring integration) ---
 
 class TestBridge:
-    def test_diagnostic_ok_to_monitoring(self):
-        result = diagnostic_to_monitoring_status(DiagStatus.new_ok("All good"))
-        assert result == Status.OK
-
-    def test_diagnostic_fail_to_monitoring(self):
-        result = diagnostic_to_monitoring_status(DiagStatus.new_fail("Connection lost"))
-        assert result == Status.ERROR
-
-    def test_diagnostic_disabled_to_monitoring(self):
-        result = diagnostic_to_monitoring_status(DiagStatus.new_disabled("Turned off"))
-        assert result == Status.SHUTDOWN
-
-    def test_diagnostic_na_to_monitoring(self):
-        result = diagnostic_to_monitoring_status(DiagStatus.new_na("Not applicable"))
-        assert result == Status.UNKNOWN
-
     def test_diagnostics_all_ok(self):
         results = {
-            "ping": DiagStatus.new_ok("Ping OK"),
-            "dns": DiagStatus.new_ok("DNS OK"),
+            "ping": StatusReport.ok("Ping OK"),
+            "dns": StatusReport.ok("DNS OK"),
         }
         assert diagnostics_to_status(results) == Status.OK
 
     def test_diagnostics_with_failure(self):
         results = {
-            "ping": DiagStatus.new_ok("Ping OK"),
-            "nats": DiagStatus.new_fail("Connection refused"),
+            "ping": StatusReport.ok("Ping OK"),
+            "nats": StatusReport.error("Connection refused"),
         }
         assert diagnostics_to_status(results) == Status.ERROR
 
     def test_diagnostics_empty(self):
         assert diagnostics_to_status({}) == Status.UNKNOWN
 
-    def test_diagnostics_mixed_ok_na(self):
+    def test_diagnostics_mixed_ok_unknown(self):
         results = {
-            "ping": DiagStatus.new_ok("OK"),
-            "dns": DiagStatus.new_na("Skipped"),
+            "ping": StatusReport.ok("OK"),
+            "dns": StatusReport.unknown("Skipped"),
         }
         assert diagnostics_to_status(results) == Status.OK
+
+    def test_diagnostics_with_shutdown(self):
+        results = {
+            "ping": StatusReport.ok("OK"),
+            "service": StatusReport.shutdown("Disabled"),
+        }
+        assert diagnostics_to_status(results) == Status.SHUTDOWN
 
     def test_health_status_metric_cb(self):
         """health_status_metric_cb wraps a component's health_status property."""
@@ -556,7 +546,7 @@ class TestBridge:
 
         class FakeHasStatuses:
             async def diagnose(self):
-                return {"ping": DiagStatus.new_fail("Timeout")}
+                return {"ping": StatusReport.error("Timeout")}
 
         monitor = MonitoredObject("test_bind")
         monitor.set_status(Status.OK)
@@ -572,7 +562,7 @@ class TestBridge:
 
         class FakeHasStatuses:
             async def diagnose(self):
-                return {"ping": DiagStatus.new_ok("OK")}
+                return {"ping": StatusReport.ok("OK")}
 
         monitor = MonitoredObject("test_bind_ok")
         monitor.set_status(Status.IDLE)

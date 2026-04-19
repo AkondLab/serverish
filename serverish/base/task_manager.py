@@ -3,7 +3,7 @@ import logging
 
 import param
 
-from serverish.base import Status
+from serverish.base import StatusReport
 from serverish.base.asyncio_util_functions import wait_for_psce
 from serverish.base.collector import Collector
 from serverish.base.hasstatuses import HasStatuses
@@ -42,14 +42,14 @@ class Task(HasStatuses):
                 e = task.exception()
             except asyncio.CancelledError:
                 logger.debug(f'Task {self.name} canceled')
-                self.set_status('running', Status.new_na(msg='Task canceled'))
+                self.set_status('running', StatusReport.unknown(msg='Task canceled'))
             else:
                 if e is not None:
                     logger.error(f'Task {self.name} failed: {task.exception()}', exc_info=task.exception())
-                    self.set_status('running', Status.new_fail(msg=f'Task failed: {task.exception()}'))
+                    self.set_status('running', StatusReport.error(msg=f'Task failed: {task.exception()}'))
                 else:
                     logger.debug(f'Task {self.name} done')
-                    self.set_status('running', Status.new_na(msg='Task finished'))
+                    self.set_status('running', StatusReport.unknown(msg='Task finished'))
             self.remove_parent()
 
         self.task = asyncio.create_task(self.coro, name=self.name)

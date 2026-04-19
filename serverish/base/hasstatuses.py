@@ -7,11 +7,11 @@ import param
 
 from serverish.base.collector import Collector
 from serverish.base.manageable import Manageable
-from serverish.base.status import Status, StatusEnum
+from serverish.base.status import Status, StatusReport
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
-CheckMethodType = Callable[[], Union[Awaitable[Status], Status]]
+CheckMethodType = Callable[[], Union[Awaitable[StatusReport], StatusReport]]
 
 class HasStatuses(Manageable):
     """Controls the resource
@@ -23,9 +23,9 @@ class HasStatuses(Manageable):
 
     """
     @staticmethod
-    def diagnose_dummy_ok() -> Status:
-        """Dummy diagnosis, returns StatusEnum.ok"""
-        return Status.new_ok(msg='Dummy OK')
+    def diagnose_dummy_ok() -> StatusReport:
+        """Dummy diagnosis, returns OK status."""
+        return StatusReport.ok(msg='Dummy OK')
 
     status = param.Dict(default={}, doc='A dictionary to hold status information')
 
@@ -68,7 +68,7 @@ class HasStatuses(Manageable):
         else:
             self.check_methods = {**self.check_methods, **methods}
 
-    def set_status(self, key: str, value: Status | None) -> None:
+    def set_status(self, key: str, value: StatusReport | None) -> None:
         """Sets status of the resource
 
         A resource can have multiple statuses, e.g. 'main', 'dns', 'http', etc.
@@ -83,16 +83,16 @@ class HasStatuses(Manageable):
         else:
             self.status[key] = value
 
-    async def diagnose(self, no_deduce: bool = False) -> dict[str, Status]:
+    async def diagnose(self, no_deduce: bool = False) -> dict[str, StatusReport]:
         """Diagnoses the object
 
         Diagnose by calling check methods and setting statuses.
         Methods are called in order, values of later methods may be deduced from earlier ones:
-        if some method returns StatusEnum.ok, or StatusEnum.na, we deduce that the result of all later methods
-        is the same.
+        if some method returns a StatusReport with deduce_other=True, we deduce that the result
+        of all later methods is the same.
         E.g. if 'ping' is OK, we deduce that 'dns' is OK too.
 
-        One can force all diagnotics to be run by setting no_deduce=True.
+        One can force all diagnostics to be run by setting no_deduce=True.
 
         Args:
             no_deduce (bool, optional): If True, don't deduce statuses from other statuses. Defaults to False.
@@ -109,11 +109,11 @@ class HasStatuses(Manageable):
             res = await asyncio.gather(*checking_tasks)
         else:
             res = []
-            deduced_status: Status | None = None
+            deduced_status: StatusReport | None = None
             deduced_name: str | None = None
             for n, m in self.check_methods.items():
                 if deduced_status is not None:
-                    r = Status.deduced(deduced_status, f'Deduced from {deduced_name}')
+                    r = StatusReport.deduced(deduced_status, f'Deduced from {deduced_name}')
                 else:
                     r = await calc_state(m)
                     if r.deduce_other:
@@ -122,16 +122,16 @@ class HasStatuses(Manageable):
                 res.append(r)
         return {n: r for n, r in zip(self.check_methods.keys(), res)}
 
-    def diagnose_sync(self, no_deduce: bool = False) -> dict[str, Status]:
+    def diagnose_sync(self, no_deduce: bool = False) -> dict[str, StatusReport]:
         """Diagnoses the object skipping async methods
 
         Diagnose by calling check methods and setting statuses.
         Methods are called in order, values of later methods may be deduced from earlier ones:
-        if some method returns StatusEnum.ok, or StatusEnum.na, we deduce that the result of all later methods
-        is the same.
+        if some method returns a StatusReport with deduce_other=True, we deduce that the result
+        of all later methods is the same.
         E.g. if 'ping' is OK, we deduce that 'dns' is OK too.
 
-        One can force all diagnotics to be run by setting no_deduce=True.
+        One can force all diagnostics to be run by setting no_deduce=True.
 
         Args:
             no_deduce (bool, optional): If True, don't deduce statuses from other statuses. Defaults to False.
@@ -139,7 +139,7 @@ class HasStatuses(Manageable):
 
         def calc_state(m):
             if asyncio.iscoroutinefunction(m):
-                return Status.new_na(msg='Skipped async test')
+                return StatusReport.unknown(msg='Skipped async test')
             else:
                 return m()
 
@@ -147,11 +147,11 @@ class HasStatuses(Manageable):
             res = [calc_state(m) for m in self.check_methods.values()]
         else:
             res = []
-            deduced_status: Status | None = None
+            deduced_status: StatusReport | None = None
             deduced_name: str | None = None
             for n, m in self.check_methods.items():
                 if deduced_status is not None:
-                    r = Status.deduced(deduced_status, f'Deduced from {deduced_name}')
+                    r = StatusReport.deduced(deduced_status, f'Deduced from {deduced_name}')
                 else:
                     r = calc_state(m)
                     if r.deduce_other:
@@ -184,15 +184,17 @@ class HasStatuses(Manageable):
         for n, s in statuses.items():
             self.set_status(n, s)
 
-    def point_of_failure(self) -> (str | None, Status | None):
+    def point_of_failure(self) -> tuple[str | None, StatusReport | None]:
         """Returns the most low-level failed status - most probably the point of failure
 
+        Checks for ERROR and FAILED statuses only (not DEGRADED/WARNING).
+
         Returns:
-            (str, Status): Name and status of the most low-level failed status
+            tuple: (name, StatusReport) of the most low-level failed status, or (None, None)
         """
 
         for k, s in reversed(self.status.items()):
-            if s == StatusEnum.fail:
+            if s.status == Status.ERROR or s.status == Status.FAILED:
                 return k, s
         return None, None
 
@@ -201,7 +203,7 @@ class HasStatuses(Manageable):
         if s is None:
             return 'OK'
         else:
-            return f'Failed {n} ({s.msg})'
+            return f'Failed {n} ({s.message})'
 
     def status_ok(self) -> bool:
         """Returns True if no failed statuses"""

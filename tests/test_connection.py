@@ -4,7 +4,7 @@ import pytest
 import socket
 
 from serverish.connection import Connection
-from serverish.base.status import StatusEnum
+from serverish.base.status import Status
 
 
 def _can_ping(host: str, port: int) -> bool:
@@ -25,7 +25,7 @@ async def test_connection_diagnostics_all_positive():
     c = Connection('google.com', 80)
     codes = await c.diagnose(no_deduce=True)
     for c, s in codes.items():
-        assert s == StatusEnum.ok
+        assert s.status == Status.OK
 
 
 @pytest.mark.skipif(
@@ -38,6 +38,6 @@ async def test_connection_diagnostics_all_positive_ip():
     codes = await c.diagnose(no_deduce=True)
     for c, s in codes.items():
         if c == 'dns':
-            assert s == 'na'
+            assert s.status == Status.UNKNOWN
         else:
-            assert s == 'ok'
+            assert s.status == Status.OK

@@ -24,9 +24,9 @@ Example::
             await do_work()
 """
 
+from serverish.base.status import Status, StatusReport, aggregate_status
 from serverish.monitoring.bridge import (
     bind_diagnostics,
-    diagnostic_to_monitoring_status,
     diagnostics_to_status,
     health_status_metric_cb,
 )
@@ -37,7 +37,6 @@ from serverish.monitoring.monitored import (
     ReportingMonitoredObject,
 )
 from serverish.monitoring.monitored_nats import MessengerMonitoredObject
-from serverish.monitoring.status import Status, StatusReport, aggregate_status
 
 __all__ = [
     "Status",
@@ -50,6 +49,5 @@ __all__ = [
     "create_monitor",
     "bind_diagnostics",
     "diagnostics_to_status",
-    "diagnostic_to_monitoring_status",
     "health_status_metric_cb",
 ]

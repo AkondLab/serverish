@@ -14,7 +14,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from serverish.monitoring.status import Status, StatusReport, aggregate_status
+from serverish.base.status import Status, StatusReport, aggregate_status
 
 
 class MonitoredObject:
