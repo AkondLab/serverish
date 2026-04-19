@@ -556,6 +556,62 @@ class Messenger(Singleton):
                                 initial_wait=initial_wait,
                                 **kwargs)
 
+    @staticmethod
+    def get_corepublisher(subject: str) -> 'MsgCorePub':
+        """Returns a core NATS publisher for a given subject (no JetStream)
+
+        Use this for fire-and-forget subjects that are not backed by a JetStream stream.
+
+        Args:
+            subject (str): subject to publish to
+
+        Returns:
+            MsgCorePub: a core-NATS publisher for the given subject
+        """
+        from serverish.messenger.msg_core_pub import MsgCorePub
+        return MsgCorePub(subject=subject, parent=Messenger())
+
+    @staticmethod
+    def get_coresubscriber(subject: str) -> 'MsgCoreSub':
+        """Returns a core NATS subscriber for a given subject (no JetStream)
+
+        Use this for fire-and-forget subjects that are not backed by a JetStream stream.
+
+        Args:
+            subject (str): subject to subscribe to
+
+        Returns:
+            MsgCoreSub: a core-NATS subscriber for the given subject
+        """
+        from serverish.messenger.msg_core_sub import MsgCoreSub
+        return MsgCoreSub(subject=subject, parent=Messenger())
+
+    @staticmethod
+    def get_commandpublisher(subject: str) -> 'MsgCommandPublisher':
+        """Returns a command publisher for a given subject (core NATS, no JetStream)
+
+        Args:
+            subject (str): subject to publish commands to
+
+        Returns:
+            MsgCommandPublisher: a command publisher for the given subject
+        """
+        from serverish.messenger.msg_cmd_pub import MsgCommandPublisher
+        return MsgCommandPublisher(subject=subject, parent=Messenger())
+
+    @staticmethod
+    def get_commandsubscriber(subject: str) -> 'MsgCommandSubscriber':
+        """Returns a command subscriber for a given subject (core NATS, no JetStream)
+
+        Args:
+            subject (str): subject to subscribe to
+
+        Returns:
+            MsgCommandSubscriber: a command subscriber for the given subject
+        """
+        from serverish.messenger.msg_cmd_sub import MsgCommandSubscriber
+        return MsgCommandSubscriber(subject=subject, parent=Messenger())
+
 
 class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
