@@ -48,28 +48,21 @@ class MsgCommandSubscriber(MsgCoreSub):
                 is the standard serverish metadata dict.  May be a plain
                 function or a coroutine function.  Return value is ignored.
         """
-        if asyncio.iscoroutinefunction(callback):
-            async def _wrapper(data: dict, meta: dict) -> None:
-                command = data.get('command', '')
-                params = data.get('params', {})
-                try:
+        is_async = asyncio.iscoroutinefunction(callback)
+
+        async def _wrapper(data: dict, meta: dict) -> None:
+            command = data.get('command', '')
+            params = data.get('params', {})
+            try:
+                if is_async:
                     await callback(command, params, meta)
-                except Exception as e:
-                    log.exception(
-                        f'Error in command callback {callback} '
-                        f'for command {command!r} meta={meta}: {e}'
-                    )
-        else:
-            async def _wrapper(data: dict, meta: dict) -> None:
-                command = data.get('command', '')
-                params = data.get('params', {})
-                try:
+                else:
                     callback(command, params, meta)
-                except Exception as e:
-                    log.exception(
-                        f'Error in command callback {callback} '
-                        f'for command {command!r} meta={meta}: {e}'
-                    )
+            except Exception as e:
+                log.exception(
+                    f'Error in command callback {callback} '
+                    f'for command {command!r} meta={meta}: {e}'
+                )
 
         await super().subscribe(_wrapper)
 
