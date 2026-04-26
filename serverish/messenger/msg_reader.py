@@ -678,7 +678,18 @@ class MsgReader(MsgDriver):
                                 f"=>{self.opt_start_time.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')}"
                                 f" , use e.g. `datetime.now(tz=timezone.utc)`")
 
-                cfg['opt_start_time'] = self.opt_start_time.astimezone(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                ts_utc = self.opt_start_time.astimezone(tz=timezone.utc)
+                # Workaround for nats-py round-trip bug: ``Base._to_utc_iso``
+                # strips ``.000000`` on whole-second values, but
+                # ``Base._parse_utc_iso`` unconditionally splits on '.', so the
+                # consumer-info echo for a zero-microsecond ``opt_start_time``
+                # raises ``ValueError: not enough values to unpack``. Bump
+                # microseconds to 1 so the server always echoes a fractional
+                # part. Harmless: 1 µs is well below JetStream's storage
+                # resolution and the start-time semantics.
+                if ts_utc.microsecond == 0:
+                    ts_utc = ts_utc.replace(microsecond=1)
+                cfg['opt_start_time'] = ts_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
         # Create the pull consumer configuration
         consumer_conf = ConsumerConfig(**cfg)
