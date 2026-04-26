@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from serverish.messenger import Messenger, get_publisher, get_reader
+from serverish.messenger.msg_reader import MsgReader
 
 
 @pytest.mark.nats
@@ -267,3 +268,45 @@ async def test_reader_sequence_tracking(messenger, unique_subject):
     assert [msg['index'] for msg in collected_second] == [4, 0, 1, 2]
     assert collected_second[0]['batch'] == 1  # Last message from first batch
     assert all(msg['batch'] == 2 for msg in collected_second[1:])  # New messages
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for zero-microsecond opt_start_time workaround (no NATS needed)
+# ---------------------------------------------------------------------------
+
+async def test_consumer_cfg_zero_microsecond_is_bumped_to_one():
+    """opt_start_time with microsecond==0 must be bumped to 1 µs.
+
+    nats-py's Base._to_utc_iso strips '.000000' on whole-second values, but
+    Base._parse_utc_iso unconditionally splits on '.' — so an echo of the
+    stored timestamp raises ValueError.  The workaround pads zero-microsecond
+    timestamps to 1 µs before sending to the server.
+    """
+    m = Messenger()
+    t0 = datetime.datetime(2026, 4, 25, 16, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    assert t0.microsecond == 0
+
+    rdr = MsgReader('test.unit', parent=m, deliver_policy='by_start_time',
+                    opt_start_time=t0)
+    cfg = await rdr._create_consumer_cfg()
+
+    # The formatted string must contain a fractional part (not end in ':00Z')
+    assert cfg.opt_start_time is not None
+    assert '.' in cfg.opt_start_time, (
+        f"opt_start_time '{cfg.opt_start_time}' has no fractional part; "
+        "nats-py _parse_utc_iso would raise ValueError"
+    )
+    assert not cfg.opt_start_time.endswith('.000000Z'), (
+        "opt_start_time still has zero microseconds — nats-py round-trip will fail"
+    )
+
+
+async def test_consumer_cfg_nonzero_microsecond_is_unchanged():
+    """opt_start_time with microsecond != 0 must not be modified."""
+    m = Messenger()
+    t = datetime.datetime(2026, 4, 25, 16, 0, 0, 123456, tzinfo=datetime.timezone.utc)
+    rdr = MsgReader('test.unit', parent=m, deliver_policy='by_start_time',
+                    opt_start_time=t)
+    cfg = await rdr._create_consumer_cfg()
+
+    assert cfg.opt_start_time == '2026-04-25T16:00:00.123456Z'
