@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
 import socket
 from typing import Iterable
 
@@ -108,14 +109,17 @@ class Connection(HasStatuses):
         Returns:
             Status: Status object, named 'ping'
         """
+        ping_exec = shutil.which('ping')
+        if ping_exec is None:
+            return StatusReport.unknown(msg="'ping' command not found in PATH, skipping ping check")
 
         async def _ping_host(host):
             proc = await asyncio.create_subprocess_exec(
-                'ping', '-c', '1', host,
+                ping_exec, '-c', '1', host,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE)
             _stdout, _stderr = await proc.communicate()
-            return (host, proc.returncode)
+            return host, proc.returncode
 
         if len(self.host) == 0:
             return StatusReport.unknown(msg='No hosts to ping')
