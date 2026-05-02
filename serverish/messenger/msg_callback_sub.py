@@ -42,7 +42,9 @@ class MsgCallbackSubscriber(MsgReader):
         Args:
             callback: a callback function to call on each message, may be asynchronous
             callback is called with two arguments: message dict and metadata dict,
-            and should return True to continue reading messages, False to stop
+            and may return False to stop reading messages. Any other return value
+            (including None — i.e. callbacks with no explicit return — and True)
+            keeps the subscription running.
         """
         self.callback = callback
         if asyncio.iscoroutinefunction(callback):
@@ -59,7 +61,7 @@ class MsgCallbackSubscriber(MsgReader):
         assert scb is not None or acb is not None
         assert not (scb is not None and acb is not None)
         cb = scb or acb
-        cont = True
+        cont: object = True
         log.debug(f"Entering sync interation{self}")
         async for data, meta in self:
             try:
@@ -74,7 +76,11 @@ class MsgCallbackSubscriber(MsgReader):
                 break
             except Exception as e:
                 log.exception(f'Error in callback {cb} for message {meta}{str(data):20}: {e}')
-            if not cont or self._stop_event.is_set() :
+            # Stop only on explicit False — None (the implicit "no return" value
+            # of a Python function) and any truthy value keep the subscription
+            # alive. Treating None as "stop" would silently kill any callback
+            # that doesn't bother returning anything, which is the common case.
+            if cont is False or self._stop_event.is_set():
                 break
         log.debug(f"Exiting sync interation{self}")
 
