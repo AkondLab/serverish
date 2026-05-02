@@ -284,6 +284,7 @@ class MsgReader(MsgDriver):
                     log.debug(self.fmt(f"Pulling {self.reader.batch} messages with timeout {fetch_timeout}s"))
                     new_msgs = await self.reader.fetch_available(batch=self.reader.batch, timeout=fetch_timeout)
                     log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
+                    log.checking(f"read_batch fetch_available subject={self.reader.subject} got={len(new_msgs)} n={self.n}")
 
                     # If no messages were available (got 404 from server or timeout), decide what to do
                     if len(new_msgs) == 0:
@@ -299,12 +300,14 @@ class MsgReader(MsgDriver):
                         # for tens of seconds after a NATS reconnect.
                         blocking_interval = 2.0
                         max_wait_cycles = 50  # Total wait: 50 * 2s = 100s (unchanged)
+                        log.checking(f"read_batch wait phase ENTER subject={self.reader.subject} cycles={max_wait_cycles} interval={blocking_interval}s")
 
                         for cycle in range(max_wait_cycles):
                             # Check for reconnection before each wait cycle
                             if self.reader._reconnect_needed.is_set():
                                 self.reader._reconnect_needed.clear()
                                 log.info(self.fmt("NATS reconnection detected during wait, recreating consumer"))
+                                log.checking(f"read_batch wait reconnect_needed subject={self.reader.subject} cycle={cycle}")
                                 await self.reader._reopen()
                                 raise self.ContinueException('reconnect_during_wait')
 
@@ -313,20 +316,33 @@ class MsgReader(MsgDriver):
                                 new_msgs = await self.reader.pull_subscription.fetch(1, timeout=blocking_interval)
                                 if new_msgs:
                                     log.debug(self.fmt(f"Received {len(new_msgs)} new message(s)"))
+                                    log.checking(f"read_batch wait fetch GOT subject={self.reader.subject} cycle={cycle} got={len(new_msgs)}")
                                     break
                             except asyncio.TimeoutError:
                                 # Timeout is normal - verify consumer still exists before next cycle
+                                # Sample CHECKING every 10 cycles to confirm liveness without log flood
+                                if cycle == 0 or (cycle + 1) % 10 == 0:
+                                    log.checking(f"read_batch wait fetch TIMEOUT subject={self.reader.subject} cycle={cycle + 1}/{max_wait_cycles}")
                                 try:
-                                    await self.reader.pull_subscription.consumer_info()
+                                    ci = await self.reader.pull_subscription.consumer_info()
+                                    if cycle == 0 or (cycle + 1) % 10 == 0:
+                                        log.checking(
+                                            f"read_batch wait consumer_info OK subject={self.reader.subject} "
+                                            f"cycle={cycle + 1} consumer={ci.name} num_pending={ci.num_pending} "
+                                            f"num_ack_pending={ci.num_ack_pending} num_waiting={ci.num_waiting}"
+                                        )
                                 except nats.js.errors.NotFoundError:
                                     log.warning(self.fmt("Consumer expired during wait, recreating"))
+                                    log.checking(f"read_batch wait consumer_info NOT_FOUND subject={self.reader.subject} cycle={cycle + 1}")
                                     await self.reader._reopen()
                                     raise self.ContinueException('consumer_expired_during_wait')
                                 except Exception as e:
                                     log.warning(self.fmt(f"Error checking consumer during wait: {e}"))
+                                    log.checking(f"read_batch wait consumer_info ERROR subject={self.reader.subject} cycle={cycle + 1} err={e!r}")
                                     # Continue to next cycle, will be handled by health check
                             except Exception as e:
                                 log.warning(self.fmt(f"Error waiting for messages: {e}"))
+                                log.checking(f"read_batch wait fetch ERROR subject={self.reader.subject} cycle={cycle + 1} err={e!r}")
                                 break  # Exit loop on other errors
 
                     self.reader.messages.extend(new_msgs)
@@ -583,12 +599,14 @@ class MsgReader(MsgDriver):
             raise MessengerReaderAlreadyOpen("Reader already open, do not reuse MsgReader instances")
 
         log.debug(f"Opening {self}")
+        log.checking(f"open ENTER subject={self.subject} policy={self.deliver_policy} start_time={self.opt_start_time}")
         js = self.connection.js
 
         self.connection.add_reconnect_cb(self.on_nats_reconnect)
 
 
         consumer_conf = await self._create_consumer_cfg()
+        log.checking(f"open consumer_conf ready subject={self.subject} policy={consumer_conf.deliver_policy}")
 
         log.debug(f"Creating pull subscription for {self}")
         self.pull_subscription = await self._create_pull_subscribtion(consumer_conf)
@@ -603,26 +621,44 @@ class MsgReader(MsgDriver):
 
         # self._emptied.set()
         await super().open()
+        log.checking(f"open EXIT subject={self.subject}")
 
     async def _create_pull_subscribtion(self, consumer_conf: ConsumerConfig):
         # Durable consumer is probably not needed (at least problematic)
         # consumer_conf.durable_name = self.name if consumer_conf.durable_name is None else consumer_conf.durable_name
         if self.connection is None or self.connection.js is None:
             raise MessengerNotConnected('Cannot create pull subscription, not connected to NATS')
+        log.checking(f"_create_pull_subscribtion START subject={self.subject} durable={consumer_conf.durable_name} policy={consumer_conf.deliver_policy}")
         try:
             ret = await self.connection.js.pull_subscribe(self.subject,
                                                            durable=consumer_conf.durable_name,
                                                            config=consumer_conf)
         except TimeoutError as e:
+            log.checking(f"_create_pull_subscribtion TIMEOUT subject={self.subject} err={e!r}")
             raise MessengerRequestTimeout(e)
-        ci = await ret.consumer_info()
+        except Exception as e:
+            log.checking(f"_create_pull_subscribtion ERROR subject={self.subject} err={e!r}")
+            raise
+        log.checking(f"_create_pull_subscribtion pull_subscribe OK subject={self.subject}")
+        try:
+            ci = await ret.consumer_info()
+        except Exception as e:
+            log.checking(f"_create_pull_subscribtion consumer_info ERROR subject={self.subject} err={e!r}")
+            raise
+        log.checking(
+            f"_create_pull_subscribtion DONE subject={self.subject} "
+            f"consumer={ci.name} stream={ci.stream_name} num_pending={ci.num_pending} "
+            f"num_ack_pending={ci.num_ack_pending}"
+        )
         return ret
 
     async def _reopen(self) -> None:
         """Reopens the pull subscription with retry logic and better error handling"""
         self._reconnect_count += 1
+        log.checking(f"_reopen ENTER subject={self.subject} reconnect_count={self._reconnect_count} last_seq={self.last_seq}")
         max_retries = 3
         for attempt in range(max_retries):
+            log.checking(f"_reopen attempt {attempt + 1}/{max_retries} subject={self.subject}")
             try:
                 # Clean up existing subscription. `unsubscribe()` only detaches the
                 # local handle; the JetStream consumer must be deleted explicitly
@@ -632,43 +668,53 @@ class MsgReader(MsgDriver):
                 if self.pull_subscription is not None:
                     try:
                         ci = await self.pull_subscription.consumer_info()
+                        log.checking(f"_reopen old consumer_info OK subject={self.subject} consumer={ci.name}")
                     except Exception as e:
                         log.debug(f"Error fetching consumer_info during reopen attempt {attempt + 1}: {e}")
+                        log.checking(f"_reopen old consumer_info FAIL subject={self.subject} err={e!r}")
                         ci = None
                     try:
                         await self.pull_subscription.unsubscribe()
+                        log.checking(f"_reopen unsubscribe OK subject={self.subject}")
                     except Exception as e:
                         log.debug(f"Error unsubscribing during reopen attempt {attempt + 1}: {e}")
+                        log.checking(f"_reopen unsubscribe FAIL subject={self.subject} err={e!r}")
                     if ci is not None:
                         try:
                             await self.connection.js.delete_consumer(stream=ci.stream_name, consumer=ci.name)
+                            log.checking(f"_reopen delete_consumer OK subject={self.subject} consumer={ci.name}")
                         except nats.js.errors.NotFoundError:
+                            log.checking(f"_reopen delete_consumer NOT_FOUND subject={self.subject} consumer={ci.name}")
                             pass  # already gone, nothing to delete
                         except Exception as e:
                             log.debug(f"Error deleting old consumer during reopen attempt {attempt + 1}: {e}")
-                
+                            log.checking(f"_reopen delete_consumer FAIL subject={self.subject} consumer={ci.name} err={e!r}")
+
                 # Create new consumer configuration
                 consumer_conf = await self._create_consumer_cfg()
-                
+
                 # Set policy for 'new messages' if any message was received
                 if self.last_seq is not None:
                     log.info(f"Reopening {self}, from seq={self.last_seq + 1}")
                     consumer_conf.deliver_policy = DeliverPolicy.BY_START_SEQUENCE
                     consumer_conf.opt_start_time = None
                     consumer_conf.opt_start_seq = self.last_seq + 1
-                
+
                 # Create new subscription
                 self.pull_subscription = await self._create_pull_subscribtion(consumer_conf=consumer_conf)
                 log.info(f"Successfully reopened {self} after {attempt + 1} attempts")
+                log.checking(f"_reopen EXIT OK subject={self.subject} attempt={attempt + 1}")
                 return  # Success!
-                
+
             except Exception as e:
                 if attempt == max_retries - 1:
                     log.error(f"Failed to reopen {self} after {max_retries} attempts: {e}")
+                    log.checking(f"_reopen EXIT GIVE_UP subject={self.subject} err={e!r}")
                     raise
-                
+
                 wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
                 log.warning(f"Reopen attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
+                log.checking(f"_reopen attempt {attempt + 1} FAIL subject={self.subject} retry_in={wait_time}s err={e!r}")
                 await asyncio.sleep(wait_time)
 
 
