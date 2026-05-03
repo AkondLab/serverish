@@ -7,6 +7,7 @@ import pytest
 
 from serverish.messenger import Messenger, get_publisher, get_reader
 from serverish.messenger.msg_reader import MsgReader
+from serverish.base.exceptions import MessengerReaderConfigError
 
 
 @pytest.mark.nats
@@ -310,3 +311,101 @@ async def test_consumer_cfg_nonzero_microsecond_is_unchanged():
     cfg = await rdr._create_consumer_cfg()
 
     assert cfg.opt_start_time == '2026-04-25T16:00:00.123456Z'
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for deliver_policy validation (no NATS needed)
+# ---------------------------------------------------------------------------
+
+def test_by_start_time_without_opt_start_time_raises():
+    """MsgReader must raise ValueError at construction when deliver_policy='by_start_time'
+    but opt_start_time is not provided."""
+    m = Messenger()
+    with pytest.raises(ValueError, match="opt_start_time"):
+        MsgReader('test.unit', parent=m, deliver_policy='by_start_time')
+
+
+def test_by_start_time_with_opt_start_time_succeeds():
+    """MsgReader must succeed when deliver_policy='by_start_time' and opt_start_time is set."""
+    m = Messenger()
+    t = datetime.datetime(2026, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    rdr = MsgReader('test.unit', parent=m, deliver_policy='by_start_time', opt_start_time=t)
+    assert rdr.deliver_policy == 'by_start_time'
+
+
+def test_by_start_sequence_without_opt_start_seq_raises():
+    """MsgReader must raise ValueError at construction when deliver_policy='by_start_sequence'
+    but opt_start_seq is not provided."""
+    m = Messenger()
+    with pytest.raises(ValueError, match="opt_start_seq"):
+        MsgReader('test.unit', parent=m, deliver_policy='by_start_sequence')
+
+
+def test_by_start_sequence_with_opt_start_seq_succeeds():
+    """MsgReader must succeed when deliver_policy='by_start_sequence' and opt_start_seq is set."""
+    m = Messenger()
+    rdr = MsgReader('test.unit', parent=m, deliver_policy='by_start_sequence',
+                    consumer_cfg={'opt_start_seq': 42})
+    assert rdr.deliver_policy == 'by_start_sequence'
+
+
+def test_messenger_get_reader_by_start_time_without_time_raises():
+    """Messenger.get_reader must raise ValueError when by_start_time is used without opt_start_time."""
+    with pytest.raises(ValueError, match="opt_start_time"):
+        Messenger.get_reader('test.unit', deliver_policy='by_start_time')
+
+
+# ---------------------------------------------------------------------------
+# Unit test: MessengerReaderConfigError is exported from serverish.base
+# ---------------------------------------------------------------------------
+
+def test_messenger_reader_config_error_is_exported():
+    """MessengerReaderConfigError must be importable from serverish.base."""
+    from serverish.base import MessengerReaderConfigError as Err  # noqa: F401
+    assert issubclass(Err, ValueError)
+
+
+# ---------------------------------------------------------------------------
+# Unit test: fatal NATS errors (BadRequestError / NotFoundError) raise
+# MessengerReaderConfigError from __anext__ (no live NATS needed)
+# ---------------------------------------------------------------------------
+
+async def test_fatal_nats_bad_request_raises_config_error():
+    """When open() raises nats.js.errors.BadRequestError the read loop must
+    stop and raise MessengerReaderConfigError instead of retrying forever."""
+    import nats.js.errors
+
+    m = Messenger()
+    t = datetime.datetime(2026, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    rdr = MsgReader('test.unit', parent=m, deliver_policy='by_start_time',
+                    opt_start_time=t, error_behavior='WAIT')
+
+    # Patch open() so it raises BadRequestError immediately
+    async def _bad_open():
+        raise nats.js.errors.BadRequestError()
+
+    rdr.open = _bad_open
+
+    with pytest.raises(MessengerReaderConfigError):
+        async for _ in rdr:
+            pass  # pragma: no cover
+
+
+async def test_fatal_nats_not_found_raises_config_error():
+    """When open() raises nats.js.errors.NotFoundError the read loop must
+    stop and raise MessengerReaderConfigError."""
+    import nats.js.errors
+
+    m = Messenger()
+    rdr = MsgReader('test.unit', parent=m, deliver_policy='all',
+                    error_behavior='WAIT')
+
+    async def _not_found_open():
+        raise nats.js.errors.NotFoundError()
+
+    rdr.open = _not_found_open
+
+    with pytest.raises(MessengerReaderConfigError):
+        async for _ in rdr:
+            pass  # pragma: no cover
+

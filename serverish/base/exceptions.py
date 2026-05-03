@@ -7,6 +7,15 @@ class MessengerNotConnected(Exception):
 class MessengerReaderStopped(Exception):
     pass
 
+class MessengerReaderConfigError(ValueError):
+    """Raised when a MsgReader is misconfigured (e.g. missing required start marker).
+
+    This is a fatal error — the same configuration will never succeed against
+    the NATS server.  The reader stops and this exception propagates out of
+    ``async for`` loops so callers fail loudly instead of retrying forever.
+    """
+    pass
+
 class MessengerReaderAlreadyOpen(RuntimeError):
     pass
 
