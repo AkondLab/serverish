@@ -12,12 +12,14 @@ from uuid import uuid4
 
 
 import nats.errors
+import nats.js.errors
 import param
 from nats.js import JetStreamContext
 from nats.js.api import DeliverPolicy, ConsumerConfig
 
 from serverish.base import wait_for_psce
-from serverish.base.exceptions import (MessengerReaderStopped, MessengerNotConnected,
+from serverish.base.exceptions import (MessengerReaderStopped, MessengerReaderConfigError,
+                                       MessengerNotConnected,
                                        MessengerReaderAlreadyOpen, MessengerRequestTimeout)
 from serverish.base.fifoset import FifoSet
 from serverish.messenger import Messenger
@@ -105,6 +107,17 @@ class MsgReader(MsgDriver):
         super().__init__(subject=subject, parent=parent,
                          deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg_defaults,
                          **kwargs)
+        # Validate deliver_policy ↔ start-marker consistency up front so
+        # callers get a clear error at construction time rather than an
+        # opaque NATS 400 error buried inside the read loop.
+        if self.deliver_policy == 'by_start_time' and self.opt_start_time is None:
+            raise ValueError(
+                "deliver_policy='by_start_time' requires opt_start_time to be set"
+            )
+        if self.deliver_policy == 'by_start_sequence' and self.consumer_cfg.get('opt_start_seq') is None:
+            raise ValueError(
+                "deliver_policy='by_start_sequence' requires opt_start_seq to be set in consumer_cfg"
+            )
         log.debug(f"Created {self}")
 
 
@@ -384,6 +397,16 @@ class MsgReader(MsgDriver):
                 st.logput(f'{e.task}-err')
                 st.error = e.error
                 self._last_error = e.error  # Track for health monitoring
+                # Fatal NATS API errors (4xx): the same request will never
+                # succeed — stop retrying immediately and surface a clear
+                # MessengerReaderConfigError to the caller.
+                if isinstance(e.error, (nats.js.errors.BadRequestError,
+                                        nats.js.errors.NotFoundError)):
+                    log.error(st.fmt(f"fatal NATS error (not retrying): {e.error}"))
+                    self._stop.set()
+                    raise MessengerReaderConfigError(
+                        f"Fatal NATS error on {self.subject}: {e.error}"
+                    ) from e.error
                 match self.error_behavior:
                     case 'RAISE':
                         log.error(st.fmt(f"raising read_next error:  {e.error}"))

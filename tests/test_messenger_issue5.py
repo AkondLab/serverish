@@ -1,6 +1,7 @@
 import nats
 import pytest
 
+from serverish.base.exceptions import MessengerReaderConfigError
 from serverish.messenger import Messenger, get_reader
 
 
@@ -14,7 +15,11 @@ async def test_messenger_issue5_subject_not_in_stream(messenger):
     reader.error_behavior = "RAISE"
     try:
         cfg = await reader.read_next()
-    except nats.js.errors.NotFoundError:
+    except MessengerReaderConfigError:
+        # "No stream found" is a fatal configuration error — it is surfaced as
+        # MessengerReaderConfigError (wrapping the original NotFoundError) so
+        # that callers get a clear, actionable exception instead of a raw NATS
+        # 404 that would otherwise retry forever in WAIT mode.
         pass
     else:
-        assert False, 'Should raise NotFoundError'
+        assert False, 'Should raise MessengerReaderConfigError'
