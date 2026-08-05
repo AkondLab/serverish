@@ -5,6 +5,7 @@ from typing import Mapping, Any, Iterable
 import re
 
 import nats
+import nats.js.errors
 from nats.js import JetStreamContext
 import param
 
@@ -146,6 +147,33 @@ class ConnectionJetStream(ConnectionNATS):
         # add subject to stream
         cfg.subjects.append(subject)
         await js.update_stream(config=cfg)
+
+    async def ensure_kv_bucket(self, bucket: str, create_if_needed: bool = False, **config):
+        """Binds to a JetStream KV bucket, optionally creating it.
+
+        Like streams (see `ensure_subject_in_stream`), buckets are not created on the fly
+        by default, because usually one has to control the bucket parameters.
+
+        Args:
+            bucket (str): KV bucket name
+            create_if_needed (bool): create the bucket if it does not exist
+            config: `nats.js.api.KeyValueConfig` parameters (e.g. history, ttl, max_bytes)
+                used only when the bucket is being created
+
+        Returns:
+            nats.js.kv.KeyValue: bound KV bucket handle
+
+        Raises:
+            nats.js.errors.BucketNotFoundError: bucket does not exist and create_if_needed is False
+        """
+        js: JetStreamContext = self.js
+        try:
+            return await js.key_value(bucket)
+        except nats.js.errors.BucketNotFoundError:
+            if not create_if_needed:
+                raise
+            logger.info(f"Creating KV bucket {bucket}")
+            return await js.create_key_value(bucket=bucket, **config)
 
 
     async def diagnose_stream_config(self) -> StatusReport:

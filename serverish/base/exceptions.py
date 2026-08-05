@@ -39,3 +39,26 @@ class MessengerRequestTimeout(MessengerRequestNoResponse, TimeoutError):
 
 class MessengerRequestNoResultYet(MessengerRequestNoResponse):
     pass
+
+
+class MessengerKvError(Exception):
+    pass
+
+
+class MessengerKvBucketNotFound(MessengerKvError):
+    """Raised when a KV bucket does not exist and the driver was not allowed to create it."""
+    pass
+
+
+class MessengerKvKeyNotFound(MessengerKvError, KeyError):
+    pass
+
+
+class MessengerKvMalformed(MessengerKvError):
+    """Raised when a KV entry does not carry a serverish envelope.
+
+    Serverish stores full ``{"data": ..., "meta": ...}`` envelopes in KV buckets.
+    An entry written by a non-serverish client fails loudly instead of being
+    silently returned as empty.
+    """
+    pass

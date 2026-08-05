@@ -627,6 +627,58 @@ class Messenger(Singleton):
         from serverish.messenger.msg_cmd_sub import MsgCommandSubscriber
         return MsgCommandSubscriber(subject=subject, parent=Messenger())
 
+    @staticmethod
+    def get_kvstore(bucket: str, **kwargs) -> 'MsgKvStore':
+        """Returns a key-value store for a given JetStream KV bucket
+
+        Values are full serverish envelopes, validated like published messages.
+
+        Args:
+            bucket (str): KV bucket name
+            kwargs: additional driver arguments (e.g. create_bucket, bucket_config)
+
+        Returns:
+            MsgKvStore: a key-value store for the given bucket
+        """
+        from serverish.messenger.msg_kv_store import MsgKvStore
+        return MsgKvStore(bucket=bucket, parent=Messenger(), **kwargs)
+
+    @staticmethod
+    def get_kvreader(bucket: str, key: str = '>', **kwargs) -> 'MsgKvReader':
+        """Returns a KV reader (async iterator over key changes) for a given bucket
+
+        Args:
+            bucket (str): KV bucket name
+            key (str): key or wildcard pattern to watch
+            kwargs: additional driver arguments (e.g. include_history, ignore_deletes)
+
+        Returns:
+            MsgKvReader: a KV reader for the given bucket
+
+        Usage:
+            reader = Messenger.get_kvreader('bucket', key='telescope.>')
+            await reader.open()
+            async for data, meta in reader:
+                print(meta['kv']['key'], data)
+        """
+        from serverish.messenger.msg_kv_read import MsgKvReader
+        return MsgKvReader(bucket=bucket, key=key, parent=Messenger(), **kwargs)
+
+    @staticmethod
+    def get_kvsubscriber(bucket: str, key: str = '>', **kwargs) -> 'MsgKvSubscriber':
+        """Returns a callback-based KV subscriber for a given bucket
+
+        Args:
+            bucket (str): KV bucket name
+            key (str): key or wildcard pattern to watch
+            kwargs: additional driver arguments (e.g. include_history, ignore_deletes)
+
+        Returns:
+            MsgKvSubscriber: a callback-based KV subscriber for the given bucket
+        """
+        from serverish.messenger.msg_kv_sub import MsgKvSubscriber
+        return MsgKvSubscriber(bucket=bucket, key=key, parent=Messenger(), **kwargs)
+
 
 class MsgDriver(Manageable):
     subject: str = param.String(default=None, allow_None=True, doc="User subject to publish to, prefix may be added")
