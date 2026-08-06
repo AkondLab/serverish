@@ -1,13 +1,24 @@
-class MessengerCannotConnect(Exception):
+class ServerishError(Exception):
+    """Common base for all serverish exceptions
+
+    Catch this to handle any error originating from the serverish library,
+    regardless of the subsystem (messenger, connection, KV). Concrete
+    exceptions additionally inherit fitting standard bases (ValueError,
+    TimeoutError, KeyError...), so idiomatic generic handlers keep working.
+    """
     pass
 
-class MessengerNotConnected(Exception):
+
+class MessengerCannotConnect(ServerishError):
     pass
 
-class MessengerReaderStopped(Exception):
+class MessengerNotConnected(ServerishError):
     pass
 
-class MessengerReaderConfigError(ValueError):
+class MessengerReaderStopped(ServerishError):
+    pass
+
+class MessengerReaderConfigError(ServerishError, ValueError):
     """Raised when a MsgReader is misconfigured (e.g. missing required start marker).
 
     This is a fatal error — the same configuration will never succeed against
@@ -16,10 +27,10 @@ class MessengerReaderConfigError(ValueError):
     """
     pass
 
-class MessengerReaderAlreadyOpen(RuntimeError):
+class MessengerReaderAlreadyOpen(ServerishError, RuntimeError):
     pass
 
-class MessengerRequestNoResponse(Exception):
+class MessengerRequestNoResponse(ServerishError):
     pass
 
 class MessengerRequestNoResponders(MessengerRequestNoResponse):
@@ -41,7 +52,19 @@ class MessengerRequestNoResultYet(MessengerRequestNoResponse):
     pass
 
 
-class MessengerKvError(Exception):
+class MessengerPublishAckTimeout(ServerishError, TimeoutError):
+    """Raised when JetStream did not confirm a publish within the ack timeout.
+
+    The message MAY have been delivered and stored — only the acknowledgement
+    did not arrive (or was not processed) in time. A starved client event loop
+    is the most common cause, not an actual delivery failure. Publishes carry
+    a ``Nats-Msg-Id`` header, so JetStream deduplicates retries of the same
+    message within the stream's duplicate window.
+    """
+    pass
+
+
+class MessengerKvError(ServerishError):
     pass
 
 

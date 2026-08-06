@@ -86,6 +86,7 @@ class MsgReader(MsgDriver):
         }
         if consumer_cfg is not None:
             consumer_cfg_defaults.update(consumer_cfg)
+        # pull request size == read-ahead buffer bound; becomes BatchPolicy (docs/design/POLICIES.md)
         self.batch = 100
         self.messages = deque()
         self.pull_subscription: JetStreamContext.PullSubscription | None = None
@@ -435,12 +436,16 @@ class MsgReader(MsgDriver):
         Uses no_wait=True protocol:
         - Server sends available messages immediately
         - Server sends 404 status if no messages exist
-        - We wait for server response (network latency) but not for new messages to arrive
+
+        End-of-data is detected deterministically from the `num_pending`
+        counter the server stamps on every delivered message - the call
+        returns as soon as the server confirms there is nothing more (or the
+        batch is full), with no fixed waiting anywhere on the happy path.
 
         Args:
             batch: Maximum number of messages to fetch
-            timeout: Network latency budget (default 2s for local/fast networks)
-                     NOT a "wait for messages" timeout - server won't wait
+            timeout: Network-failure backstop (default 2s). Never consumed on
+                     the happy path - NOT a "wait for messages" timeout
 
         Returns:
             List of messages that were immediately available on server
@@ -477,77 +482,92 @@ class MsgReader(MsgDriver):
             pull_subscription._deliver,
         )
 
-        # Wait for server response (messages and/or 404 status)
-        # The server will respond quickly because no_wait=True
-        # We just need to account for network latency
+        # Wait for server response (messages and/or closing status).
+        #
+        # Deterministic end-of-data: every JetStream delivery is stamped with
+        # `num_pending` — the server-side count of messages still remaining
+        # for this consumer *after* that message (correct also for filtered
+        # and last_per_subject consumers). The loop therefore ends without
+        # any arbitrary grace period:
+        #   - a message arrives with num_pending == 0 → nothing left, return,
+        #   - batch filled while num_pending > 0 → return, the caller pulls again,
+        #   - 404 (empty subject) / 408 (partial-batch closure) → server-confirmed end.
+        # `timeout` is a network-failure backstop only; no happy path consumes
+        # it, so the call is as fast as the server and the network allow.
         start_time = time.monotonic()
-        got_404_status = False
-        got_any_message = False
 
-        while not got_404_status:
-            deadline = timeout - (time.monotonic() - start_time)
-            if deadline <= 0:
-                # Timeout - if we got some messages, that's OK (server might not send 404 after exact batch)
-                # If we got nothing, this is a network problem
-                if not got_any_message and len(msgs) == 0:
-                    log.warning(f"{self} Timeout after {timeout}s waiting for server response (network issue?)")
-                else:
-                    log.debug(f"{self} Timeout after getting {len(msgs)} messages (no 404 received)")
+        def log_backstop():
+            if msgs:
+                log.warning(f"{self} No end-of-data signal within {timeout}s backstop, "
+                            f"returning {len(msgs)} messages (no num_pending metadata? network issue?)")
+            else:
+                log.warning(f"{self} Timeout after {timeout}s waiting for server response (network issue?)")
+
+        while True:
+            remaining = timeout - (time.monotonic() - start_time)
+            if remaining <= 0:
+                log_backstop()
                 break
 
             try:
-                # Wait for server to respond (messages or 404)
-                msg = await asyncio.wait_for(queue.get(), timeout=deadline)
-                pull_subscription._sub._pending_size -= len(msg.data)
-                queue.task_done()
-
-                status = JetStreamContext.is_status_msg(msg)
-
-                if status == "404":
-                    # Server says: no (more) messages available
-                    # This is the definitive "done" signal
-                    log.debug(f"{self} Server confirmed no more messages (404 status)")
-                    got_404_status = True
-                    break
-                elif status == "408":
-                    # Request Timeout - server gave us what it had but couldn't fill batch
-                    # This is effectively "no more messages available right now"
-                    log.debug(f"{self} Server returned partial batch (408 status - request timeout)")
-                    got_404_status = True  # Treat same as 404 - no more messages available
-                    break
-                elif status:
-                    # Other status message (shouldn't happen with pull, but handle it)
-                    log.debug(f"{self} Received status: {status}")
-                    continue
-                else:
-                    # Real message
-                    msgs.append(msg)
-                    got_any_message = True
-                    needed -= 1
-
-                    # If we got all requested messages, give server very short time to send 404
-                    # but don't wait long - likely there are more messages
-                    if needed == 0:
-                        # Very short grace period for 404 status (100ms)
-                        # If 404 doesn't arrive, we'll just fetch again on next iteration
-                        remaining_time = timeout - (time.monotonic() - start_time)
-                        if remaining_time > 0.1:
-                            deadline = 0.1
-                            timeout = time.monotonic() - start_time + 0.1  # Update timeout to exit on next deadline check
-
+                msg = await asyncio.wait_for(queue.get(), timeout=remaining)
             except asyncio.TimeoutError:
-                # Timeout after getting messages is OK - server might not send 404 if we got exact batch
-                if got_any_message or len(msgs) > 0:
-                    log.debug(f"{self} Got {len(msgs)} messages, no 404 status (normal for exact batch)")
-                else:
-                    # No messages at all - this could be empty subject or network problem
-                    log.debug(f"{self} No messages or 404 within {timeout}s")
+                log_backstop()
                 break
             except Exception as e:
                 log.warning(f"{self} Error in fetch_available: {e}")
                 break
+            pull_subscription._sub._pending_size -= len(msg.data)
+            queue.task_done()
+
+            status = JetStreamContext.is_status_msg(msg)
+            if status == "404":
+                # Server says: no messages available at all
+                log.debug(f"{self} Server confirmed no messages (404 status)")
+                break
+            elif status == "408":
+                # Request Timeout - server closed the request after a partial batch
+                log.debug(f"{self} Server closed partial batch (408 status)")
+                break
+            elif status:
+                # Other status message (shouldn't happen with pull, but handle it)
+                log.debug(f"{self} Received status: {status}")
+                continue
+
+            # Real message
+            msgs.append(msg)
+            needed -= 1
+
+            num_pending = self._num_pending(msg)
+            if num_pending == 0:
+                # Server-confirmed end of data - no reason to wait for the
+                # closing status (which may trail by a network round trip,
+                # or never come for an exact-batch response)
+                log.debug(f"{self} Server reports num_pending=0, returning {len(msgs)} messages")
+                break
+            if needed == 0:
+                # Batch full and the server has more - return immediately,
+                # the caller decides whether to pull again
+                log.debug(f"{self} Batch of {len(msgs)} filled, "
+                          f"server reports {num_pending} message(s) still pending")
+                break
+            # num_pending unknown (no JS metadata): keep reading until a
+            # closing status arrives or the backstop hits (degraded mode)
 
         return msgs
+
+    @staticmethod
+    def _num_pending(msg: Msg) -> int | None:
+        """Returns server-side `num_pending` from JetStream message metadata
+
+        `num_pending` is the number of messages still remaining for this
+        consumer after the given message. Returns None if the metadata is
+        unavailable (non-JetStream message).
+        """
+        try:
+            return msg.metadata.num_pending
+        except Exception:
+            return None
 
     async def next_msg(self, timeout: Optional[float] = None) -> Msg:
         """ [NATS fix] Fetch the next message from the subscription

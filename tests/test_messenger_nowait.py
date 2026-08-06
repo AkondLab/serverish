@@ -49,6 +49,118 @@ async def test_nowait_with_messages(messenger, unique_subject):
 
 
 @pytest.mark.nats
+async def test_nowait_eager_finish_after_batch(messenger, unique_subject):
+    """nowait=True must return as soon as the server confirms end-of-data.
+
+    ``fetch_available`` ends deterministically on the ``num_pending == 0``
+    stamp of the last delivered message — no grace period, no waiting for
+    the trailing 404/408 status. Prior to the fix, the reader spent the
+    full 2s ``fetch_timeout`` on the trailing pull even on localhost.
+    """
+    subject = unique_subject
+
+    pub = get_publisher(subject=subject)
+    await messenger.purge(subject)
+    for i in range(10):
+        await pub.publish(data={'index': i})
+    await asyncio.sleep(0.1)
+
+    reader = get_reader(subject=subject, deliver_policy='all', nowait=True)
+
+    received = []
+    start = asyncio.get_event_loop().time()
+    async for data, _meta in reader:
+        received.append(data)
+    elapsed = asyncio.get_event_loop().time() - start
+
+    await reader.close()
+
+    assert len(received) == 10
+    # On localhost the whole read is a few network round trips (~ms);
+    # the bound only needs to sit safely below the old ~2s failure mode
+    # while tolerating CI noise.
+    assert elapsed < 1.0, (
+        f"nowait=True on a small batch took {elapsed:.2f}s — "
+        "eager-finish regression (num_pending exit not working?)"
+    )
+    log.info(f"Eager finish: {len(received)} messages in {elapsed:.2f}s")
+
+
+@pytest.mark.nats
+async def test_nowait_exact_batch_no_closing_status(messenger, unique_subject):
+    """Exact-batch worst case: server sends NO closing status at all.
+
+    When available messages exactly fill the pull batch (reader.batch = 100),
+    the server responds with the batch and neither 404 nor 408 — there is
+    nothing to wait for. Before the num_pending-driven exit this path burned
+    the full 2s fetch timeout per pull; now the batch-full + num_pending
+    check returns immediately.
+    """
+    subject = unique_subject
+
+    pub = get_publisher(subject=subject)
+    await messenger.purge(subject)
+    for i in range(100):  # exactly MsgReader batch size
+        await pub.publish(data={'index': i})
+    await asyncio.sleep(0.1)
+
+    reader = get_reader(subject=subject, deliver_policy='all', nowait=True)
+
+    received = []
+    start = asyncio.get_event_loop().time()
+    async for data, _meta in reader:
+        received.append(data)
+    elapsed = asyncio.get_event_loop().time() - start
+
+    await reader.close()
+
+    assert len(received) == 100
+    assert elapsed < 1.5, (
+        f"nowait=True on an exact batch took {elapsed:.2f}s — "
+        "server sends no closing status here, exit must come from num_pending"
+    )
+    log.info(f"Exact batch: {len(received)} messages in {elapsed:.2f}s")
+
+
+@pytest.mark.nats
+async def test_nowait_last_per_subject_snapshot(messenger, unique_subject):
+    """Snapshot pattern (tcsctl-style): last_per_subject over a subject tree.
+
+    Verifies that num_pending is correct for filtered last_per_subject
+    consumers: it must count only deliverable messages (one per subject),
+    not all messages in the stream — otherwise the eager exit would fire
+    too late or never.
+    """
+    pub_root = unique_subject
+
+    await messenger.purge(pub_root)
+    for revision in range(3):
+        for k in range(5):
+            pub = get_publisher(subject=f"{pub_root}.k{k}")
+            await pub.publish(data={'k': k, 'revision': revision})
+    await asyncio.sleep(0.1)
+
+    reader = get_reader(subject=f"{pub_root}.>", deliver_policy='last_per_subject', nowait=True)
+
+    received = []
+    start = asyncio.get_event_loop().time()
+    async for data, _meta in reader:
+        received.append(data)
+    elapsed = asyncio.get_event_loop().time() - start
+
+    await reader.close()
+
+    # one message per subject, each the latest revision
+    assert len(received) == 5
+    assert all(data['revision'] == 2 for data in received)
+    assert elapsed < 1.0, (
+        f"last_per_subject snapshot took {elapsed:.2f}s — "
+        "num_pending eager exit not effective for filtered consumers?"
+    )
+    log.info(f"Snapshot: {len(received)} messages in {elapsed:.2f}s")
+
+
+@pytest.mark.nats
 async def test_nowait_empty_subject(messenger, unique_subject):
     """Test that nowait=True returns immediately when no messages exist"""
     subject = unique_subject

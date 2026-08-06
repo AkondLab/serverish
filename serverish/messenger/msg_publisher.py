@@ -7,7 +7,7 @@ import nats.errors
 import nats.js
 import param
 
-from serverish.base import MessengerNotConnected
+from serverish.base import MessengerNotConnected, MessengerPublishAckTimeout
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver, log
 
@@ -18,8 +18,19 @@ class MsgPublisher(MsgDriver):
     Use this class if you want to publish data to a messenger subject.
     Check for specialist publishers for common use cases.
 
+    Every publish carries a ``Nats-Msg-Id`` header equal to the message
+    ``meta.id``, so JetStream deduplicates repeated deliveries of the same
+    message within the stream's duplicate window. This makes retrying after
+    an ack timeout safe: if the original publish did reach the stream (a
+    common case when the client event loop is starved and the ack is simply
+    processed too late), the retry is discarded by the server.
+
     Parameters:
         raise_on_publish_error (bool): Raise on publish error, default `True` re-raises underlying exceptions
+        ack_timeout_retries (int): How many times to retry a publish for which no JetStream
+            ack arrived in time (default 2). Retries are deduplicated server-side via
+            ``Nats-Msg-Id``. When retries are exhausted, `MessengerPublishAckTimeout` is
+            raised (subject to `raise_on_publish_error`).
 
     Health monitoring:
         The publisher tracks publish statistics accessible via `health_status` property:
@@ -30,6 +41,9 @@ class MsgPublisher(MsgDriver):
     """
 
     raise_on_publish_error = param.Boolean(default=True, doc="Raise on publish error")
+    ack_timeout_retries = param.Integer(default=2, bounds=(0, None),
+                                        doc="Retries when JetStream ack does not arrive in time; "
+                                            "safe thanks to Nats-Msg-Id deduplication")
 
     def __init__(self, **kwargs) -> None:
         # Health monitoring fields
@@ -60,8 +74,10 @@ class MsgPublisher(MsgDriver):
             log.error(f"Message {msg['meta']['id']} validation error: {e}")
             raise e
         self.messenger.log_msg_trace(msg['data'], msg['meta'], f"PUB to {self.subject}")
+        headers = dict(kwargs.pop('headers', None) or {})
+        headers.setdefault('Nats-Msg-Id', msg['meta']['id'])  # server-side dedup, makes ack-timeout retries safe
         try:
-            await self.connection.js.publish(self.subject, bdata, **kwargs)
+            await self._publish_with_ack_retries(bdata, headers, msg['meta']['id'], **kwargs)
             # Track successful publish
             self._publish_count += 1
             self._last_publish_time = time.monotonic()
@@ -89,6 +105,33 @@ class MsgPublisher(MsgDriver):
                 msg['meta']['tags'].append('error')
                 msg['meta']['status'] = str(e)
         return msg
+
+    async def _publish_with_ack_retries(self, bdata: bytes, headers: dict, msg_id: str, **kwargs) -> None:
+        """Publishes to JetStream, retrying when the ack does not arrive in time
+
+        A missing ack does not mean the message was not delivered - it may
+        well be stored while the ack was processed too late (e.g. starved
+        client event loop). Retries are deduplicated server-side via the
+        Nats-Msg-Id header, so this never produces duplicates.
+
+        Raises:
+            MessengerPublishAckTimeout: no ack after all retries
+        """
+        for attempt in range(self.ack_timeout_retries + 1):
+            try:
+                await self.connection.js.publish(self.subject, bdata, headers=headers, **kwargs)
+                return
+            except nats.errors.TimeoutError as e:
+                if attempt < self.ack_timeout_retries:
+                    log.warning(f"No JetStream ack for message {msg_id} on '{self.subject}' "
+                                f"(attempt {attempt + 1}/{self.ack_timeout_retries + 1}), retrying - "
+                                f"deduplicated by Nats-Msg-Id")
+                    continue
+                raise MessengerPublishAckTimeout(
+                    f"No JetStream ack for message {msg_id} on '{self.subject}' "
+                    f"after {self.ack_timeout_retries + 1} attempts. The message MAY have been "
+                    f"delivered - a missing ack often means a starved client event loop, "
+                    f"not a delivery failure") from e
 
     @property
     def health_status(self) -> dict:
