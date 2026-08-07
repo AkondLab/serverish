@@ -283,6 +283,17 @@ def test_publisher_error_policy():
                       raise_on_publish_error=False)
 
 
+def test_publisher_unlimited_attempts_by_value():
+    """UNLIMITED must be recognized by value - float('inf') is a distinct
+    object from math.inf, identity checks would OverflowError on int(inf)
+    (Copilot review, PR #40)."""
+    from serverish.messenger import get_publisher
+    pub = get_publisher('test.policies.unit',
+                        error_policy=ErrorPolicy(retry=RetryPolicy(attempts=float('inf'))))
+    assert pub._ack_retry.attempts == UNLIMITED
+    assert pub.ack_timeout_retries == 2  # legacy int param untouched by the unlimited policy
+
+
 def test_publisher_legacy_ack_retries_stay_live():
     from serverish.messenger import get_publisher
     pub = get_publisher('test.policies.unit')

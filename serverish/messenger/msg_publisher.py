@@ -65,7 +65,7 @@ class MsgPublisher(MsgDriver):
             kwargs['raise_on_publish_error'] = self.errors.on_error is OnError.RAISE
         if (self.errors is not None and self.errors.retry is not None
                 and self.errors.retry.attempts is not None
-                and self.errors.retry.attempts is not UNLIMITED):
+                and self.errors.retry.attempts != UNLIMITED):  # equality, not identity: float('inf') is a distinct object
             kwargs['ack_timeout_retries'] = int(self.errors.retry.attempts)
         # --- end policy normalization ---
         # Health monitoring fields
