@@ -11,8 +11,15 @@ from serverish.messenger import Messenger, get_publisher, get_reader
 
 @pytest.mark.nats_js
 async def test_publish_sets_msg_id_header(messenger, unique_subject):
-    """Every publish carries Nats-Msg-Id equal to meta.id."""
+    """Every publish carries Nats-Msg-Id of the form <instance>:<meta.id>.
+
+    The per-process instance prefix is essential: meta.id (gen_id) is only
+    process-locally unique, so a bare meta.id header would collide across
+    processes (and restarts) on a shared stream and JetStream would silently
+    drop the later messages as duplicates.
+    """
     pub = get_publisher(unique_subject)
+    await pub.open()
     msg = await pub.publish(data={'v': 1})
     await pub.close()
 
@@ -20,7 +27,34 @@ async def test_publish_sets_msg_id_header(messenger, unique_subject):
     stream = await js.find_stream_name_by_subject(unique_subject)
     raw = await js.get_last_msg(stream, unique_subject)
     assert raw.headers is not None
-    assert raw.headers.get('Nats-Msg-Id') == msg['meta']['id']
+    assert raw.headers.get('Nats-Msg-Id') == f"{Messenger().instance_id}:{msg['meta']['id']}"
+
+
+@pytest.mark.nats_js
+async def test_publish_no_cross_process_dedup_collision(messenger, unique_subject):
+    """A message with the same meta.id as one published by a *different* process
+    (different instance prefix) must NOT be swallowed by stream deduplication."""
+    import uuid
+    js = Messenger().connection.js
+    # Simulate another process publishing the same meta.id: different instance
+    # prefix. Both the prefix and the forced meta.id are unique per test run -
+    # stream-wide dedup would legitimately drop exact repeats (same process
+    # naturally emits 'msg-N' ids; an earlier suite test or a re-run within
+    # the duplicate window would collide, which is this very bug).
+    shared_id = f"msg-x{uuid.uuid4().hex[:8]}"
+    await js.publish(unique_subject,
+                     f'{{"data":{{}},"meta":{{"id":"{shared_id}"}}}}'.encode(),
+                     headers={'Nats-Msg-Id': f'otherproc-{uuid.uuid4().hex[:8]}:{shared_id}'})
+
+    pub = get_publisher(unique_subject)
+    await pub.open()
+    msg = await pub.publish(data={'v': 1}, meta={'id': shared_id})
+    await pub.close()
+
+    reader = get_reader(unique_subject, deliver_policy='all', nowait=True)
+    received = [meta['nats']['seq'] async for _data, meta in reader]
+    await reader.close()
+    assert len(received) == 2, "same meta.id from different processes must both be stored"
 
 
 @pytest.mark.nats_js
@@ -64,7 +98,7 @@ async def test_publish_retries_on_ack_timeout(messenger, unique_subject):
         await pub.close()
 
     assert len(attempts) == 2, "one failed attempt + one successful retry"
-    assert attempts[0] == attempts[1] == msg['meta']['id'], \
+    assert attempts[0] == attempts[1] == f"{Messenger().instance_id}:{msg['meta']['id']}", \
         "retry must reuse the same Nats-Msg-Id for dedup"
 
 

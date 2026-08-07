@@ -75,7 +75,11 @@ class MsgPublisher(MsgDriver):
             raise e
         self.messenger.log_msg_trace(msg['data'], msg['meta'], f"PUB to {self.subject}")
         headers = dict(kwargs.pop('headers', None) or {})
-        headers.setdefault('Nats-Msg-Id', msg['meta']['id'])  # server-side dedup, makes ack-timeout retries safe
+        # Server-side dedup id: makes ack-timeout retries safe. Must be globally
+        # unique, hence the per-process instance prefix - meta.id alone is only
+        # process-locally unique and would collide across processes/restarts,
+        # silently dropping messages within the stream's duplicate window.
+        headers.setdefault('Nats-Msg-Id', f"{self.messenger.instance_id}:{msg['meta']['id']}")
         try:
             await self._publish_with_ack_retries(bdata, headers, msg['meta']['id'], **kwargs)
             # Track successful publish
