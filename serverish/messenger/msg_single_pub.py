@@ -23,6 +23,10 @@ class MsgSinglePublisher(MsgPublisher):
 def get_singlepublisher(subject) -> MsgSinglePublisher:
     """Returns a single-publisher for a given subject
 
+    .. deprecated:: 2.3
+        Use `single_publish()` for one-shot publishing or `get_publisher()`
+        for repeated publishing.
+
     Args:
         subject (str): subject to publish to
 
@@ -30,7 +34,7 @@ def get_singlepublisher(subject) -> MsgSinglePublisher:
         MsgSinglePublisher: a publisher for the given subject
 
     """
-    return Messenger.get_singlepublisher(subject)
+    return Messenger.get_singlepublisher(subject)  # emits the DeprecationWarning
 
 
 async def single_publish(subject, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
@@ -43,5 +47,6 @@ async def single_publish(subject, data: dict | None = None, meta: dict | None = 
         kwargs: additional arguments to pass to the connection
 
     """
-    pub = get_singlepublisher(subject)
+    # constructed directly, not via the deprecated factory
+    pub = MsgSinglePublisher(subject=subject, parent=Messenger())
     return await pub.publish(data, meta=meta, **kwargs)

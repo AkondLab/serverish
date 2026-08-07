@@ -62,7 +62,8 @@ class Connection(HasStatuses):
     async def _check_host(resolver, h):
         import aiodns
         try:
-            await resolver.gethostbyname(h, socket.AF_INET)
+            # getaddrinfo, not the deprecated gethostbyname (removed in aiodns 4 line)
+            await resolver.getaddrinfo(h, family=socket.AF_INET, type=socket.SOCK_STREAM)
             return None
         except aiodns.error.DNSError as e:
             try:

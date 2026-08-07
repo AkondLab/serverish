@@ -174,7 +174,7 @@ class MsgJournalPublisher(MsgPublisher):
         return status
 
 
-def get_journalpublisher(subject) -> MsgJournalPublisher:
+def get_journalpublisher(subject, **kwargs) -> MsgJournalPublisher:
     """Returns a publisher for a given subject
 
     Args:
@@ -184,4 +184,4 @@ def get_journalpublisher(subject) -> MsgJournalPublisher:
         MsgJournalPublisher: a publisher for the given subject
 
     """
-    return Messenger.get_journalpublisher(subject)
+    return Messenger.get_journalpublisher(subject, **kwargs)
