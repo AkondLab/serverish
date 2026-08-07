@@ -24,7 +24,7 @@ from nats.aio.msg import Msg
 from serverish.base import dt_utcnow_array, dt_from_array, Task, create_task, dt_ensure_array
 from serverish.base.collector import Collector
 from serverish.connection.connection_jets import ConnectionJetStream
-from serverish.base.idmanger import gen_id
+from serverish.base.idmanger import gen_id, gen_uid
 from serverish.base.manageable import Manageable
 from serverish.messenger.msgvalidator import MsgValidator
 from serverish.base.singleton import Singleton
@@ -51,6 +51,13 @@ class Messenger(Singleton):
     def __init__(self, name: str = None, parent: Collector = None, **kwargs) -> None:
         self.validator = MsgValidator()
         self.opener_task: Task | None = None
+        # Random per-process token, part of the Nats-Msg-Id dedup header.
+        # meta.id (gen_id) is only process-locally unique - two processes (or one
+        # process restarted within the stream's duplicate window) both emit
+        # 'msg-1', 'msg-2', ..., and JetStream would silently drop the later
+        # publishes as duplicates. The instance prefix makes the dedup identity
+        # global while retries still reuse the exact same header.
+        self.instance_id: str = gen_uid('mi', 12)
         super().__init__(name, parent, **kwargs)
 
     @property
