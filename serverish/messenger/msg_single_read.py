@@ -72,6 +72,9 @@ def get_singlereader(subject: str,
                            **kwargs) -> 'MsgSingleReader':
     """Returns a single value reader for a given subject
 
+    .. deprecated:: 2.3
+        Use `single_read()` for one-shot reads or `get_reader()` for iteration.
+
     Args:
         subject (str): subject to read from
         deliver_policy: deliver policy, in this context 'last' is most useful
@@ -114,5 +117,7 @@ async def single_read(subject: str,
             print("No data published yet")
 
     """
-    reader = get_singlereader(subject, deliver_policy, **kwargs)
+    # constructed directly, not via the deprecated factory
+    reader = MsgSingleReader(subject=subject, parent=Messenger(),
+                             deliver_policy=deliver_policy, **kwargs)
     return await reader.read(wait=wait)

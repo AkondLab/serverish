@@ -155,6 +155,17 @@ class Messenger(Singleton):
 
 
     async def close(self):
+        # Safety net: close drivers that are still open. The tree owns their
+        # lifecycle - a forgotten reader would otherwise leak a server-side
+        # consumer until its inactive_threshold expires.
+        for child in list(self.children_by_name.values()):
+            if isinstance(child, MsgDriver) and child.is_open:
+                log.warning(f"Messenger.close(): driver {child} left open - closing it now; "
+                            f"close drivers explicitly (async with / await close())")
+                try:
+                    await child.close()
+                except Exception as e:
+                    log.warning(f"Error closing {child} on Messenger.close(): {e}")
         if self.conn is not None:
             await self.connection.disconnect()
             self.conn = None
@@ -323,17 +334,19 @@ class Messenger(Singleton):
         await js.purge_stream(stream, subject=subject)
 
     @staticmethod
-    def get_publisher(subject: str) -> "MsgPublisher":
+    def get_publisher(subject: str, **kwargs) -> "MsgPublisher":
         """Returns a publisher for a given subject
 
         Args:
             subject (str): subject to publish to
+            kwargs: additional MsgPublisher arguments, e.g. error_policy (ErrorPolicy),
+                raise_on_publish_error, ack_timeout_retries
 
         Returns:
             MsgPublisher: message publisher
         """
         from serverish.messenger.msg_publisher import MsgPublisher
-        return MsgPublisher(subject=subject, parent=Messenger())
+        return MsgPublisher(subject=subject, parent=Messenger(), **kwargs)
 
     @staticmethod
     def get_reader(subject: str,
@@ -363,7 +376,8 @@ class Messenger(Singleton):
         # Extract MsgReader-specific parameters
         reader_params = {}
         consumer_cfg = {}
-        reader_param_names = {'nowait', 'error_behavior', 'on_missed_messages'}
+        reader_param_names = {'nowait', 'error_behavior', 'on_missed_messages',
+                              'error_policy', 'batch_policy'}
 
         for key, value in kwargs.items():
             if key in reader_param_names:
@@ -380,7 +394,13 @@ class Messenger(Singleton):
 
     @staticmethod
     def get_singlepublisher(subject):
-        """Returns a signle-publisher for a given subject
+        """Returns a single-publisher for a given subject
+
+        .. deprecated:: 2.3
+            The single publisher exists only to back the `single_publish()`
+            convenience function - use that for one-shot publishing, or
+            `get_publisher()` for repeated publishing (holding long-lived
+            single-publishers re-opens the driver on every publish).
 
         Args:
             subject (str): subject to publish to
@@ -389,6 +409,11 @@ class Messenger(Singleton):
             MsgSinglePublisher: a publisher for the given subject
 
         """
+        import warnings
+        warnings.warn(
+            "get_singlepublisher() is deprecated: use single_publish() for one-shot "
+            "publishing or get_publisher() for repeated publishing",
+            DeprecationWarning, stacklevel=2)
         from serverish.messenger.msg_single_pub import MsgSinglePublisher
         return MsgSinglePublisher(subject=subject, parent=Messenger())
 
@@ -396,6 +421,18 @@ class Messenger(Singleton):
     def get_singlereader(subject,
                          deliver_policy='last',
                          **kwargs):
+        """Returns a single-reader for a given subject
+
+        .. deprecated:: 2.3
+            The single reader exists only to back the `single_read()`
+            convenience function - use that for one-shot reads, or
+            `get_reader()` for iteration.
+        """
+        import warnings
+        warnings.warn(
+            "get_singlereader() is deprecated: use single_read() for one-shot reads "
+            "or get_reader() for iteration",
+            DeprecationWarning, stacklevel=2)
         from serverish.messenger.msg_single_read import MsgSingleReader
         return MsgSingleReader(subject=subject,
                                parent=Messenger(),
@@ -458,11 +495,12 @@ class Messenger(Singleton):
                                parent=Messenger())
 
     @staticmethod
-    def get_progresspublisher(subject) -> 'MsgProgressPublisher':
+    def get_progresspublisher(subject, **kwargs) -> 'MsgProgressPublisher':
         """Returns a progress tracking publisher for a given subject
 
         Args:
             subject (str): subject to report progress to
+            kwargs: additional MsgPublisher arguments (e.g. error_policy)
 
         Returns:
             MsgProgressPublisher: a publisher for the given subject
@@ -471,7 +509,7 @@ class Messenger(Singleton):
 
         from serverish.messenger.msg_progress_pub import MsgProgressPublisher
         return MsgProgressPublisher(subject=subject,
-                                    parent=Messenger())
+                                    parent=Messenger(), **kwargs)
 
     @staticmethod
     def get_progressreader(subject,
@@ -497,11 +535,12 @@ class Messenger(Singleton):
                                     **kwargs)
 
     @staticmethod
-    def get_journalpublisher(subject) -> 'MsgJournalPublisher':
+    def get_journalpublisher(subject, **kwargs) -> 'MsgJournalPublisher':
         """Returns a journal publisher for a given subject
 
         Args:
             subject (str): subject to publish to
+            kwargs: additional MsgPublisher arguments (e.g. error_policy)
 
         Returns:
             MsgJournalPublisher: a publisher for the given subject
@@ -509,7 +548,7 @@ class Messenger(Singleton):
         """
         from serverish.messenger.msg_journal_pub import MsgJournalPublisher
         return MsgJournalPublisher(subject=subject,
-                                   parent=Messenger())
+                                   parent=Messenger(), **kwargs)
 
     @staticmethod
     def get_journalreader(subject,
@@ -712,16 +751,41 @@ class MsgDriver(Manageable):
         return self.messenger.connection
 
     async def open(self) -> None:
+        # (re-)register in the parent tree - close() deregisters, and drivers
+        # may be reopened (single publishers, KV one-shots, @ensure_open)
+        if self.parent is not None and self not in getattr(self.parent, 'children_names', {}):
+            self.parent.ensure_parenting(self)
         self.is_open = True
 
     async def close(self) -> None:
         self.is_open = False
+        # Deregister from the parent collector: the tree holds strong
+        # references, so closed drivers would otherwise be retained for the
+        # process lifetime (a service creating ad-hoc readers accumulates
+        # them without bound). The driver keeps its own parent reference so
+        # it can be reopened.
+        parent = self.parent
+        if parent is not None and self in getattr(parent, 'children_names', {}):
+            parent.remove_child(self)
+            self.parent = parent  # remove_child cleared it; keep for reopen
 
     @staticmethod
     def ensure_open(func):
+        """Decorator: runs the method on a temporarily opened driver.
+
+        If the driver is already open, the method just runs. If it is
+        closed, the driver is opened for the duration of the call and
+        **closed again afterwards** - the driver's open/closed state is
+        restored, NOT left open. This enables one-shot usage
+        (e.g. `kv_get`/`kv_put`, single publishers) without ceremony.
+
+        For repeated operations do not rely on this per-call open/close
+        churn - open the driver explicitly (``async with driver:`` or
+        ``await driver.open()``).
+        """
         @functools.wraps(func)
         async def wrapper(driver: MsgDriver, *args, **kwargs):
-            # If not open, use context manager
+            # If not open, use context manager (opens, runs, closes back)
             if not driver.is_open:
                 async with driver:
                     return await func(driver, *args, **kwargs)

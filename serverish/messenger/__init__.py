@@ -1,4 +1,7 @@
 from .messenger import Messenger
+from .policies import (UNLIMITED, BatchPolicy, DeliverAll, DeliverFromSeq, DeliverFromTime,
+                       DeliverLast, DeliverLastPerSubject, DeliverNew, DeliveryPolicy,
+                       ErrorPolicy, OnError, OnMissed, PolicyConflict, RetryPolicy, Until)
 from .msgvalidator import MsgValidator, DataValidator, MetaValidator
 from .msg_publisher import get_publisher
 from .msg_reader import get_reader

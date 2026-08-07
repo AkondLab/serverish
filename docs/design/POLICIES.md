@@ -108,7 +108,14 @@ Slow consumer → small pulls (bounded memory & residency); fast consumer on a
 high-RTT link → pulls grow toward `max_batch` (fewer round trips — see the
 production profiling: 34 k msgs over ~290 ms RTT, pull size 100→1000 =
 3.3× faster). `num_pending` (server-stamped) additionally caps the request
-at what actually exists.
+at what actually exists, and growth is damped to ≤ 8× the previous pull —
+a two-sample rate estimate can be wildly optimistic, and the damping turns
+a potential memory spike into a geometric ramp-up (2→16→128→…).
+
+**Driver default (decided 2026-08-07): dynamic** —
+`BatchPolicy(dynamic=True, initial_batch=2, max_time_in_memory=5.0,
+max_batch=10_000)`. Static behaviour is pinned explicitly with
+`BatchPolicy(dynamic=False, max_batch=…)` (default static size: 100).
 
 ### 1.4 Defaults strategy
 
