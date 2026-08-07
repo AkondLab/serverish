@@ -94,7 +94,7 @@ class MsgReader(MsgDriver):
     static_batch_default = 100
 
     def __init__(self, subject, parent = None,
-                 deliver_policy = 'all',
+                 deliver_policy: str | DeliveryPolicy = 'all',
                  opt_start_time = None,
                  consumer_cfg=None,
                  error_policy: ErrorPolicy | None = None,
@@ -1042,7 +1042,7 @@ class MsgReader(MsgDriver):
 
 
 def get_reader(subject: str,
-                   deliver_policy='all',
+                   deliver_policy: str | DeliveryPolicy = 'all',
                    opt_start_time=None,
                    **kwargs) -> 'MsgReader':
     """Returns a subscription for a given subject, manages single subscription

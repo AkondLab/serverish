@@ -5,10 +5,10 @@
 * Component management
 * Singletons
 * Connections management and diagnostics
-* NATS based Messenger
+* NATS based Messenger — publishers, readers, KV buckets, RPC ([user guide with examples](doc/messenger.md))
 * Live documents - auto-updating configuration from NATS
 
-See [`doc` directory](doc/) for more documentation.
+See the [Messenger user guide](doc/messenger.md) and the [`doc` directory](doc/) for more documentation.
 
 ## Optional (extras) dependencies
 The following extras are available:
@@ -28,6 +28,16 @@ this will install `nats-py` package.
 - Custom JetStream API replacing nats-py private internals access
 
 ## Changes
+* 2.3 Policy objects (`DeliveryPolicy`, `ErrorPolicy`/`RetryPolicy`, `BatchPolicy`) for typed driver
+  configuration with backward-compatible string/kwarg forms; dynamic pull batching by default;
+  driver lifecycle fixes (closed drivers leave the Messenger tree); deprecates
+  `get_singlepublisher`/`get_singlereader` and publishing on never-opened publishers.
+  See the [Messenger user guide](doc/messenger.md).
+* 2.2 Deterministic end-of-data for `nowait` readers (server-stamped `num_pending`, no fixed waits);
+  publish ack-timeout handling with `Nats-Msg-Id` dedup and transparent retries; common
+  `ServerishError` exception base. **Use 2.2.1+** — 2.2.0 is yanked (silent message loss, #38).
+* 2.1 JetStream KV bucket support: `MsgKvStore`/`MsgKvReader`/`MsgKvSubscriber` with full
+  envelope semantics and one-shot `kv_get`/`kv_put`.
 * 1.7 Subscription reliability: reader auto-recovers from NATS disconnects and consumer expiry,
   RPC responder auto-resubscribes, `health_status` property on all drivers (reader, publisher,
   RPC responder, connection) with reconnect counts, error tracking, slow consumer detection.

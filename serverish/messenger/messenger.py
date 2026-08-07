@@ -27,6 +27,7 @@ from serverish.connection.connection_jets import ConnectionJetStream
 from serverish.base.idmanger import gen_id, gen_uid
 from serverish.base.manageable import Manageable
 from serverish.messenger.msgvalidator import MsgValidator
+from serverish.messenger.policies import DeliveryPolicy
 from serverish.base.singleton import Singleton
 from serverish.base import MessengerCannotConnect
 
@@ -350,7 +351,7 @@ class Messenger(Singleton):
 
     @staticmethod
     def get_reader(subject: str,
-                   deliver_policy='all',
+                   deliver_policy: str | DeliveryPolicy = 'all',
                    opt_start_time=None,
                    **kwargs) -> 'MsgReader':
         """Returns a reader for a given subject
