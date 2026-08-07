@@ -204,6 +204,8 @@ def test_reader_static_batch_from_policy():
     assert reader._next_batch_size() == 7
     plain_static = get_reader('test.policies.unit', batch_policy=BatchPolicy(dynamic=False))
     assert plain_static._next_batch_size() == 100  # static default size
+    plain_static.batch = 42  # legacy mutable attribute stays honored in static mode
+    assert plain_static._next_batch_size() == 42
 
 
 def test_reader_dynamic_batch_sizing():

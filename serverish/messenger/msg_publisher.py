@@ -74,7 +74,12 @@ class MsgPublisher(MsgDriver):
         self._last_publish_time: float | None = None
         self._last_error: Exception | None = None
         self._warned_unopened: bool = False
+        self._was_opened: bool = False
         super().__init__(**kwargs)
+
+    async def open(self) -> None:
+        self._was_opened = True
+        await super().open()
 
     @property
     def _ack_retry(self) -> RetryPolicy:
@@ -100,10 +105,12 @@ class MsgPublisher(MsgDriver):
         """
         if not self.is_open and not self._warned_unopened:
             self._warned_unopened = True
+            state = "closed" if self._was_opened else "never-opened"
             warnings.warn(
-                f"Publishing on a publisher that was never opened ({self}). Open it explicitly "
-                f"(await pub.open() or 'async with pub:') - publishing on a closed publisher "
-                f"will become an error in serverish 3.0; for one-shot use single_publish()",
+                f"Publishing on a {state} publisher ({self}). Open it explicitly "
+                f"(await pub.open() or 'async with pub:') - publishing on a publisher "
+                f"that is not open will become an error in serverish 3.0; "
+                f"for one-shot use single_publish()",
                 DeprecationWarning, stacklevel=2)
         msg = self.messenger.create_msg(data, meta)
         bdata = self.messenger.encode(msg)

@@ -84,12 +84,24 @@ async def test_publisher_retry_policy_paces_ack_retries(messenger, unique_subjec
 @pytest.mark.nats
 async def test_publish_on_unopened_publisher_warns_once(messenger, unique_subject):
     pub = get_publisher(unique_subject)
-    with pytest.warns(DeprecationWarning, match="never opened"):
+    with pytest.warns(DeprecationWarning, match="never-opened"):
         await pub.publish(data={'v': 1})
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # second publish must NOT warn again
         await pub.publish(data={'v': 2})
     await pub.close()
+
+
+@pytest.mark.nats
+async def test_publish_on_closed_publisher_warns_accurately(messenger, unique_subject):
+    """A publisher that WAS opened and then closed must not be accused of
+    being 'never opened' (Copilot review, PR #40)."""
+    pub = get_publisher(unique_subject)
+    await pub.open()
+    await pub.publish(data={'v': 1})
+    await pub.close()
+    with pytest.warns(DeprecationWarning, match="closed publisher"):
+        await pub.publish(data={'v': 2})
 
 
 @pytest.mark.nats

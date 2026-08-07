@@ -641,7 +641,9 @@ class MsgReader(MsgDriver):
         dynamic = (self.batching.dynamic if self.batching.dynamic is not None
                    else self.batch_defaults.dynamic)
         if not dynamic:
-            return self.batching.max_batch or self.static_batch_default
+            # the policy wins; otherwise honor the legacy mutable `reader.batch`
+            # attribute (initialized to the static default)
+            return self.batching.max_batch or self.batch
         max_batch = self.batching.max_batch or self.batch_defaults.max_batch
         rate = self._consumption_rate()
         if rate is None:
