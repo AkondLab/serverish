@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "serverish"
-version = "2.2.1"
+version = "2.2.2"
 description = "helpers for server alike projects"
 authors = ["Mikołaj Kałuszyński", "MMME team"]
 readme = "README.md"
@@ -24,7 +24,7 @@ pytest = ">=9.1,<10"
 pytest-asyncio = "^1.4"
 nats-py = "^2.6.0"
 jupyter = "*"
-rich = "^13.5.2"
+rich = ">=13.5.2"
 aiodns = ">=3.1.1,<5"
 testcontainers = {extras = ["nats"], version = "^4.14.2"}
 pytest-timeout = "^2.4.0"
