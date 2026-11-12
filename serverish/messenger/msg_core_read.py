@@ -120,8 +120,19 @@ class MsgCoreReader(MsgDriver):
         # a subject family takes two subscriptions feeding one queue: no single
         # pattern matches both 'a.b' and 'a.b.c'
         patterns = subject_family(self.subject) if self.family else [self.subject]
-        with nats_errors_translated(f"Subscribing to '{self.subject}' failed"):
-            self.subscriptions = [await nc.subscribe(pattern, cb=_cb) for pattern in patterns]
+        subscriptions: list[Subscription] = []
+        try:
+            with nats_errors_translated(f"Subscribing to '{self.subject}' failed"):
+                for pattern in patterns:
+                    subscriptions.append(await nc.subscribe(pattern, cb=_cb))
+        except BaseException:  # also cancellation: all subscriptions or none
+            for subscription in subscriptions:
+                try:
+                    await subscription.unsubscribe()
+                except Exception as e:
+                    log.debug(f'{self} error unsubscribing after a failed subscribe: {e}')
+            raise
+        self.subscriptions = subscriptions
 
     # ------------------------------------------------------------------
     # Reading

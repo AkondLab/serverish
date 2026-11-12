@@ -416,6 +416,10 @@ class MsgReader(MsgDriver):
                 # succeed — stop retrying immediately and surface a clear
                 # MessengerReaderConfigError to the caller.
                 # (open() reports client errors translated, the original is its cause)
+                if isinstance(e.error, MessengerReaderConfigError):  # already diagnosed as fatal
+                    log.error(st.fmt(f"fatal reader configuration error (not retrying): {e.error}"))
+                    self._stop.set()
+                    raise e.error
                 cause = e.error.__cause__ if isinstance(e.error, MessengerJetStreamError) else e.error
                 if isinstance(cause, (nats.js.errors.BadRequestError,
                                       nats.js.errors.NotFoundError)):
@@ -627,16 +631,79 @@ class MsgReader(MsgDriver):
         # consumer_conf.durable_name = self.name if consumer_conf.durable_name is None else consumer_conf.durable_name
         if self.connection is None or self.connection.js is None:
             raise MessengerNotConnected('Cannot create pull subscription, not connected to NATS')
+        js = self.connection.js
         with nats_errors_translated(f"Creating consumer for '{self.subject}' failed"):
             try:
-                ret = await self.connection.js.pull_subscribe(self.subject,
-                                                               durable=consumer_conf.durable_name,
-                                                               config=consumer_conf)
+                subject, stream, filters = self.subject, None, None
+                if self.family:
+                    # Subject family: one consumer, two filters - no single pattern matches
+                    # both 'a.b' and 'a.b.c' ('a.b.>' requires at least one more token)
+                    stream, filters = await self._resolve_family()
+                    if len(filters) == 1:
+                        subject = filters[0]  # only this part of the family is persistent
+                    elif filters:
+                        consumer_conf.filter_subjects = filters
+                ret = await js.pull_subscribe(subject,
+                                              durable=consumer_conf.durable_name,
+                                              stream=stream,
+                                              config=consumer_conf)
             except nats.errors.TimeoutError as e:
                 raise MessengerRequestTimeout(
                     f"Creating consumer for '{self.subject}' timed out: {e}") from e
             ci = await ret.consumer_info()
+            if filters:
+                await self._verify_family_filters(ret, ci, filters)
         return ret
+
+    async def _resolve_family(self) -> tuple[str | None, list[str]]:
+        """Finds where the subject family is stored and which of its patterns are
+
+        The family may be persistent as a whole or in part - e.g. only the keyed
+        subjects ``a.b.>`` while the bare ``a.b`` is not. Looking the storage up
+        by the bare subject alone would miss the latter case.
+
+        Returns:
+            the stream storing the family and the family patterns it covers;
+            ``(None, [])`` if no part of the family is persistent (the caller
+            then fails on the bare subject, as a plain reader would)
+        """
+        js = self.connection.js
+        stream: str | None = None
+        covered: list[str] = []
+        for pattern in subject_family(self.subject):
+            try:
+                found = await js.find_stream_name_by_subject(pattern)
+            except nats.js.errors.NotFoundError:
+                continue
+            if stream is None:
+                stream = found
+            if found == stream:
+                covered.append(pattern)
+            else:
+                log.warning(f"{self} subject family is split between storages, '{pattern}' is not read")
+        return stream, covered
+
+    async def _verify_family_filters(self, subscription, consumer_info, filters: list[str]) -> None:
+        """Makes sure the server enforces the family filters, removes the consumer otherwise
+
+        A server which does not know multiple subject filters (NATS < 2.10)
+        ignores them and would deliver every message of the storage, not the family.
+
+        Raises:
+            MessengerReaderConfigError: the server did not apply the filters
+        """
+        config = consumer_info.config
+        enforced = config.filter_subjects or ([config.filter_subject] if config.filter_subject else [])
+        if set(enforced) == set(filters):
+            return
+        try:
+            await subscription.unsubscribe()
+            await self.connection.js.delete_consumer(stream=consumer_info.stream_name, consumer=consumer_info.name)
+        except Exception as e:
+            log.warning(f"{self} could not remove the unfiltered consumer: {e}")
+        raise MessengerReaderConfigError(
+            f"The server does not filter the subject family of '{self.subject}' (asked for {filters}, "
+            f"got {enforced or 'no filter'}). Subject families on persistent subjects need NATS server 2.10 or newer")
 
     async def _reopen(self) -> None:
         """Reopens the pull subscription with retry logic and better error handling"""
@@ -701,11 +768,6 @@ class MsgReader(MsgDriver):
         reader_params = ['nowait', 'error_behavior', 'on_missed_messages', 'family']
         for param in reader_params:
             cfg.pop(param, None)
-
-        # Subject family: one consumer, two filters - no single pattern matches both
-        # 'a.b' and 'a.b.c' ('a.b.>' requires at least one more token)
-        if self.family:
-            cfg['filter_subjects'] = subject_family(self.subject)
 
         # Convert the delivery policy from a string to the appropriate DeliverPolicy enum
         if self.deliver_policy is not None:

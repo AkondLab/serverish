@@ -37,28 +37,35 @@ class MsgKvReader(MsgKvDriver):
 
     def __init__(self, **kwargs) -> None:
         self._watcher: KeyValue.KeyWatcher | None = None
+        self._exhausted: bool = False  # nowait: the current state has been delivered
         super().__init__(**kwargs)
 
     async def open(self) -> None:
         await super().open()
+        self._exhausted = False
         with nats_errors_translated(f"Watching KV {self.bucket}/{self.key} failed"):
             self._watcher = await self.kv.watch(self.key,
                                                 include_history=self.include_history,
                                                 ignore_deletes=self.ignore_deletes)
 
     async def close(self) -> None:
+        await self._stop_watcher()
+        await super().close()
+
+    async def _stop_watcher(self) -> None:
         if self._watcher is not None:
             try:
                 await self._watcher.stop()
             except Exception as e:
                 log.debug(f"Error stopping KV watcher for {self}: {e}")
             self._watcher = None
-        await super().close()
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> tuple[dict | None, dict]:
+        if self._exhausted:
+            raise StopAsyncIteration  # stays finished until the next open()
         if self._watcher is None:
             raise MessengerReaderStopped(f"KV reader {self} is not open")
         while True:
@@ -67,7 +74,11 @@ class MsgKvReader(MsgKvDriver):
             if entry is None:
                 # nats-py sends a None marker once the initial replay is done, it is not a value
                 if self.nowait:
-                    raise StopAsyncIteration  # the current state has been delivered, that is all we were asked for
+                    # the current state has been delivered, that is all we were asked for:
+                    # no more updates may arrive, now or on a later iteration
+                    self._exhausted = True
+                    await self._stop_watcher()
+                    raise StopAsyncIteration
                 continue
             return self.decode_entry(entry)
 

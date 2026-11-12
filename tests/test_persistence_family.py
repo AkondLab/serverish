@@ -222,3 +222,101 @@ async def test_kv_reader_nowait_delivers_current_state_and_finishes(messenger):
 
 async def _collect(reader) -> dict:
     return {meta['kv']['key']: data async for data, meta in reader}
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups (PR #50)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.nats_js
+async def test_family_reader_when_only_the_keyed_subjects_are_persistent(messenger):
+    """A keyed collection stored as 'a.b.>' only: the bare 'a.b' is not persistent,
+    the family reader must still find and read the keys"""
+    from nats.js.api import StreamConfig
+    js = Messenger().connection.js
+    name = f"famtest{uuid.uuid4().hex[:8]}"
+    base = f'{name}.item'
+    await js.add_stream(StreamConfig(name=name, subjects=[f'{base}.>'], storage='memory'))
+    try:
+        assert await Messenger().is_persistent(base) is False
+        await _publish(f'{base}.key1', {'n': 1})
+        await _publish(f'{base}.key2', {'n': 2})
+        reader = get_reader(base, deliver_policy='all', nowait=True, family=True)
+        received = [(meta['nats']['subject'], data['n']) async for data, meta in reader]
+        await reader.close()
+        assert received == [(f'{base}.key1', 1), (f'{base}.key2', 2)]
+    finally:
+        await js.delete_stream(name)
+
+
+@pytest.mark.nats_js
+async def test_family_reader_refuses_a_server_ignoring_its_filters(messenger, unique_subject):
+    """NATS < 2.10 ignores multiple filters and would deliver the whole storage:
+    the reader must notice, remove the consumer and fail clearly"""
+    from serverish.base import MessengerReaderConfigError
+    js = Messenger().connection.js
+    original = js.pull_subscribe
+    created = []
+
+    async def old_server_pull_subscribe(*args, **kwargs):
+        subscription = await original(*args, **kwargs)
+        info = await subscription.consumer_info()
+        created.append((info.stream_name, info.name))
+        info.config.filter_subjects = None  # what a server unaware of the field reports back
+        info.config.filter_subject = None
+        subscription.consumer_info = mock.AsyncMock(return_value=info)
+        return subscription
+
+    reader = get_reader(f'{unique_subject}.item', deliver_policy='all', nowait=True, family=True)
+    with mock.patch.object(js, 'pull_subscribe', old_server_pull_subscribe):
+        with pytest.raises(MessengerReaderConfigError, match='2.10'):
+            await reader.open()
+        assert not reader.is_open
+        # the read loop treats it as fatal too - no endless retrying
+        with pytest.raises(MessengerReaderConfigError, match='2.10'):
+            await asyncio.wait_for(reader.read_next(), timeout=5)
+
+    import nats.js.errors
+    for stream, consumer in created:
+        with pytest.raises(nats.js.errors.NotFoundError):
+            await js.consumer_info(stream, consumer)
+
+
+@pytest.mark.nats
+async def test_family_core_reader_subscribes_all_or_nothing(messenger, volatile_subject):
+    from serverish.base import MessengerConnectionClosed
+    import nats.errors
+    nc = Messenger().connection.nc
+    original = nc.subscribe
+    made = []
+
+    async def second_fails(subject, **kwargs):
+        if made:
+            raise nats.errors.ConnectionClosedError()
+        made.append(await original(subject, **kwargs))
+        return made[-1]
+
+    reader = get_corereader(f'{volatile_subject}.item', family=True)
+    with mock.patch.object(nc, 'subscribe', second_fails):
+        with pytest.raises(MessengerConnectionClosed):
+            await reader.open()
+    assert reader.subscriptions == []
+    assert not reader.is_open
+    assert len(made) == 1 and made[0]._closed, "the first subscription must be rolled back"
+
+
+@pytest.mark.nats_js
+async def test_kv_reader_nowait_stays_finished(messenger):
+    bucket = f"test-kv-{uuid.uuid4().hex[:8]}"
+    try:
+        async with get_kvstore(bucket, create_bucket=True) as store:
+            await store.put('a', {'v': 1})
+            async with get_kvreader(bucket, nowait=True) as reader:
+                assert await asyncio.wait_for(_collect(reader), timeout=5) == {'a': {'v': 1}}
+                await store.put('b', {'v': 2})  # a later change must not revive the finished reader
+                assert await asyncio.wait_for(_collect(reader), timeout=5) == {}
+            # reopening takes a fresh snapshot
+            async with get_kvreader(bucket, nowait=True) as reader:
+                assert await asyncio.wait_for(_collect(reader), timeout=5) == {'a': {'v': 1}, 'b': {'v': 2}}
+    finally:
+        await Messenger().connection.js.delete_key_value(bucket)
