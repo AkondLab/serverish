@@ -139,7 +139,9 @@ class MsgCoreReader(MsgDriver):
                 try:
                     await subscription.unsubscribe()
                 except Exception as e:
-                    log.debug(f'{self} error unsubscribing after a failed subscribe: {e}')
+                    # still subscribed: keep the handle, so close() can retry the cleanup
+                    log.warning(f'{self} could not roll back a subscription after a failed subscribe: {e}')
+                    self.subscriptions.append(subscription)
             raise
         self.subscriptions = subscriptions
 

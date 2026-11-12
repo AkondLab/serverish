@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Mapping, Any, Iterable
 import re
@@ -157,13 +158,25 @@ class ConnectionJetStream(ConnectionNATS):
             MessengerNotConnected: no connection to ask through
             MessengerTransportError: the server could not be asked
         """
-        js = self._require_js(f"Cannot check persistence of subject '{subject}'")
-        with nats_errors_translated(f"Checking persistence of subject '{subject}' failed"):
-            try:
-                await js.find_stream_name_by_subject(subject)
-            except nats.js.errors.NotFoundError:
-                return False
-        return True
+        return bool(await self.subject_storages(subject))
+
+    async def subject_storages(self, subject: str) -> list[str]:
+        """Returns the names of all streams storing messages of the subject (or of a subject pattern)
+
+        A plain subject is stored in one stream at most; a pattern (``a.b.>``) may
+        be spread over several (``a.b.east.>`` here, ``a.b.west.>`` there).
+
+        Raises:
+            MessengerNotConnected: no connection to ask through
+            MessengerTransportError: the server could not be asked
+        """
+        js = self._require_js(f"Cannot check where subject '{subject}' is stored")
+        with nats_errors_translated(f"Checking where subject '{subject}' is stored failed"):
+            # the client library's find_stream_name_by_subject() reports the first match only
+            answer = await js._api_request(f"{js._prefix}.STREAM.NAMES",
+                                           json.dumps({'subject': subject}).encode(),
+                                           timeout=js._timeout)
+        return list(answer.get('streams') or [])
 
     def _require_js(self, context: str) -> JetStreamContext:
         if self.js is None:

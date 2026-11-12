@@ -668,25 +668,22 @@ class MsgReader(MsgDriver):
             then fails on the bare subject, as a plain reader would)
 
         Raises:
-            MessengerReaderConfigError: the family is split between two storages -
-                no single reader can deliver it whole, and a part of it would be a silent lie
+            MessengerReaderConfigError: the family is split between storages (the bare subject
+                apart from the keyed ones, or the keyed ones among themselves) - no single
+                reader can deliver it whole, and a part of it would be a silent lie
         """
-        js = self.connection.js
-        stream: str | None = None
-        covered: list[str] = []
+        storages: dict[str, list[str]] = {}  # storage -> family patterns it holds messages of
         for pattern in subject_family(self.subject):
-            try:
-                found = await js.find_stream_name_by_subject(pattern)
-            except nats.js.errors.NotFoundError:
-                continue
-            if stream is not None and found != stream:
-                raise MessengerReaderConfigError(
-                    f"The subject family of '{self.subject}' is stored in two places ('{covered[0]}' in "
-                    f"'{stream}', '{pattern}' in '{found}') and cannot be read as one. "
-                    f"Store the family together, or read its parts with separate readers")
-            stream = found
-            covered.append(pattern)
-        return stream, covered
+            for storage in await self.connection.subject_storages(pattern):
+                storages.setdefault(storage, []).append(pattern)
+        if len(storages) > 1:
+            places = ', '.join(f"{' and '.join(patterns)} in '{storage}'" for storage, patterns in storages.items())
+            raise MessengerReaderConfigError(
+                f"The subject family of '{self.subject}' is stored in several places ({places}) and cannot "
+                f"be read as one. Store the family together, or read its parts with separate readers")
+        for storage, patterns in storages.items():
+            return storage, patterns
+        return None, []
 
     async def _verify_family_filters(self, subscription, consumer_info, filters: list[str]) -> None:
         """Makes sure the server enforces the family filters, removes the consumer otherwise

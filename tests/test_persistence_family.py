@@ -337,7 +337,7 @@ async def test_family_split_between_storages_is_rejected_not_read_in_part(messen
         await _publish(base, {'n': 0})
         await _publish(f'{base}.key', {'n': 1})
         reader = get_reader(base, deliver_policy='all', nowait=True, family=True)
-        with pytest.raises(MessengerReaderConfigError, match='two places'):
+        with pytest.raises(MessengerReaderConfigError, match="several places"):
             await reader.open()
         assert not reader.is_open
         # each part is still readable on its own
@@ -366,3 +366,66 @@ async def test_family_core_reader_close_can_be_retried(messenger, volatile_subje
     await reader.close()
     assert reader.subscriptions == [] and first._closed
     assert not reader.is_open
+
+
+@pytest.mark.nats_js
+async def test_family_with_keys_split_between_storages_is_rejected(messenger):
+    """Keyed subjects stored in two places ('a.b.east.>' here, 'a.b.west.>' there), the bare
+    subject nowhere: one lookup would report a single storage and silently omit the other half"""
+    from nats.js.api import StreamConfig
+    from serverish.base import MessengerReaderConfigError
+    js = Messenger().connection.js
+    name = f"famkeys{uuid.uuid4().hex[:8]}"
+    base = f'{name}.item'
+    await js.add_stream(StreamConfig(name=f'{name}_east', subjects=[f'{base}.east.>'], storage='memory'))
+    await js.add_stream(StreamConfig(name=f'{name}_west', subjects=[f'{base}.west.>'], storage='memory'))
+    try:
+        assert sorted(await Messenger().connection.subject_storages(f'{base}.>')) == [f'{name}_east', f'{name}_west']
+        await _publish(f'{base}.east.k', {'n': 1})
+        await _publish(f'{base}.west.k', {'n': 2})
+        reader = get_reader(base, deliver_policy='all', nowait=True, family=True)
+        with pytest.raises(MessengerReaderConfigError, match='several places'):
+            await reader.open()
+        # a family within one of the storages reads fine
+        reader = get_reader(f'{base}.east', deliver_policy='all', nowait=True, family=True)
+        assert [data['n'] async for data, _ in reader] == [1]
+        await reader.close()
+    finally:
+        await js.delete_stream(f'{name}_east')
+        await js.delete_stream(f'{name}_west')
+
+
+@pytest.mark.nats
+async def test_family_core_reader_keeps_a_subscription_it_could_not_roll_back(messenger, volatile_subject):
+    """Subscribe fails half-way and the rollback fails too: the live subscription stays known,
+    so close() can still remove it"""
+    import nats.errors
+    from serverish.base import MessengerConnectionClosed
+    nc = Messenger().connection.nc
+    original = nc.subscribe
+    made = []
+
+    async def second_fails(subject, **kwargs):
+        if made:
+            raise nats.errors.ConnectionClosedError()
+        subscription = await original(subject, **kwargs)
+        real_unsubscribe = subscription.unsubscribe
+        attempts = []
+
+        async def unsubscribe_fails_once(*args, **kw):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise nats.errors.ConnectionClosedError()
+            return await real_unsubscribe(*args, **kw)
+
+        subscription.unsubscribe = unsubscribe_fails_once
+        made.append(subscription)
+        return subscription
+
+    reader = get_corereader(f'{volatile_subject}.item', family=True)
+    with mock.patch.object(nc, 'subscribe', second_fails):
+        with pytest.raises(MessengerConnectionClosed):
+            await reader.open()
+    assert reader.subscriptions == made, "the subscription which is still live must not be forgotten"
+    await reader.close()
+    assert reader.subscriptions == [] and made[0]._closed
