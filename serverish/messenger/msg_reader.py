@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 import time
 from dataclasses import dataclass, field
 import functools
-from uuid import uuid4
 
 
 import nats.errors
@@ -24,7 +23,7 @@ from serverish.base.exceptions import (MessengerReaderStopped, MessengerReaderCo
 from serverish.base.fifoset import FifoSet
 from serverish.connection.nats_errors import nats_errors_translated, translate_nats_error
 from serverish.messenger import Messenger
-from serverish.messenger.messenger import MsgDriver
+from serverish.messenger.messenger import MsgDriver, subject_family
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -44,6 +43,9 @@ class MsgReader(MsgDriver):
         opt_start_time (datetime): start time for 'by_start_time' deliver policy
         consumer_cfg (dict): additional consumer configuration, see nats.js.api.ConsumerConfig
         nowait (bool): if True, read_next will return immediately if no messages are available and will finish iteration
+        family (bool): read the subject family - the subject itself and all subjects extending it with
+            further tokens (``a.b`` and ``a.b.>``), but not its siblings. `meta['nats']['subject']`
+            tells the actual subject of each message
         error_behavior (str): on serious error (e.g. disconnection), one of 'RAISE', 'FINISH', 'WAIT'
         on_missed_messages (str): on missed messages (e.g. during broken connection), one of 'SKIP', 'REPLAY'
 
@@ -75,6 +77,10 @@ class MsgReader(MsgDriver):
                             doc="If True, read_next will return immediately if no messages are available and will "
                                 "finish iteration")
 
+    family = param.Boolean(default=False,
+                           doc="Read the subject family: the subject and all subjects extending it with "
+                               "further tokens")
+
     def __init__(self, subject, parent = None,
                  deliver_policy = 'all',
                  opt_start_time = None,
@@ -82,6 +88,8 @@ class MsgReader(MsgDriver):
                  **kwargs) -> None:
         if parent is None:
             parent = Messenger()
+        if kwargs.get('family'):
+            subject_family(subject)  # validates: fails early for a subject which cannot have a family
         consumer_cfg_defaults = {
             'inactive_threshold': 300  # 5 minutes - allows ample time for health checks to detect and recover
         }
@@ -408,6 +416,10 @@ class MsgReader(MsgDriver):
                 # succeed — stop retrying immediately and surface a clear
                 # MessengerReaderConfigError to the caller.
                 # (open() reports client errors translated, the original is its cause)
+                if isinstance(e.error, MessengerReaderConfigError):  # already diagnosed as fatal
+                    log.error(st.fmt(f"fatal reader configuration error (not retrying): {e.error}"))
+                    self._stop.set()
+                    raise e.error
                 cause = e.error.__cause__ if isinstance(e.error, MessengerJetStreamError) else e.error
                 if isinstance(cause, (nats.js.errors.BadRequestError,
                                       nats.js.errors.NotFoundError)):
@@ -580,58 +592,6 @@ class MsgReader(MsgDriver):
         except Exception:
             return None
 
-    async def next_msg(self, timeout: Optional[float] = None) -> Msg:
-        """ [NATS fix] Fetch the next message from the subscription
-        :params timeout: Time in seconds to wait for next message before timing out.
-                        supports 0 for non-blocking and None for blocking indefinitely.
-        :raises nats.errors.TimeoutError:
-
-        next_msg can be used to retrieve the next message from a stream of messages using
-        await syntax, this only works when not passing a callback on `subscribe`::
-
-            sub = await nc.subscribe('hello')
-            msg = await sub.next_msg(timeout=1)
-
-        """
-        ps = self.pull_subscription._sub
-        if ps._conn.is_closed:
-            raise errors.ConnectionClosedError
-
-        if ps._cb:
-            raise errors.Error(
-                'nats: next_msg cannot be used in async subscriptions'
-            )
-
-        task_name = str(uuid4())
-        try:
-            if timeout == 0.0:
-                future = asyncio.create_task(
-                    ps._pending_queue.get_nowait()
-                )
-            else:
-                future = asyncio.create_task(
-                    asyncio.wait_for(ps._pending_queue.get(), timeout)
-                )
-            ps._pending_next_msgs_calls[task_name] = future
-            msg = await future
-        except asyncio.TimeoutError:
-            if ps._conn.is_closed:
-                raise errors.ConnectionClosedError
-            raise errors.TimeoutError
-        except asyncio.CancelledError:
-            if ps._conn.is_closed:
-                raise errors.ConnectionClosedError
-            raise
-        else:
-            ps._pending_size -= len(msg.data)
-            # For sync subscriptions we will consider a message
-            # to be done once it has been consumed by the client
-            # regardless of whether it has been processed.
-            ps._pending_queue.task_done()
-            return msg
-        finally:
-            ps._pending_next_msgs_calls.pop(task_name, None)
-
     async def open(self) -> None:
         """Opens the reader: creates the JetStream consumer and subscribes to it
 
@@ -671,16 +631,81 @@ class MsgReader(MsgDriver):
         # consumer_conf.durable_name = self.name if consumer_conf.durable_name is None else consumer_conf.durable_name
         if self.connection is None or self.connection.js is None:
             raise MessengerNotConnected('Cannot create pull subscription, not connected to NATS')
+        js = self.connection.js
         with nats_errors_translated(f"Creating consumer for '{self.subject}' failed"):
             try:
-                ret = await self.connection.js.pull_subscribe(self.subject,
-                                                               durable=consumer_conf.durable_name,
-                                                               config=consumer_conf)
+                subject, stream, filters = self.subject, None, None
+                if self.family:
+                    # Subject family: one consumer, two filters - no single pattern matches
+                    # both 'a.b' and 'a.b.c' ('a.b.>' requires at least one more token)
+                    stream, filters = await self._resolve_family()
+                    if len(filters) == 1:
+                        subject = filters[0]  # only this part of the family is persistent
+                    elif filters:
+                        consumer_conf.filter_subjects = filters
+                ret = await js.pull_subscribe(subject,
+                                              durable=consumer_conf.durable_name,
+                                              stream=stream,
+                                              config=consumer_conf)
             except nats.errors.TimeoutError as e:
                 raise MessengerRequestTimeout(
                     f"Creating consumer for '{self.subject}' timed out: {e}") from e
             ci = await ret.consumer_info()
+            if filters:
+                await self._verify_family_filters(ret, ci, filters)
         return ret
+
+    async def _resolve_family(self) -> tuple[str | None, list[str]]:
+        """Finds where the subject family is stored and which of its patterns are
+
+        The family may be persistent as a whole or in part - e.g. only the keyed
+        subjects ``a.b.>`` while the bare ``a.b`` is not. Looking the storage up
+        by the bare subject alone would miss the latter case.
+
+        Returns:
+            the stream storing the family and the family patterns it covers;
+            ``(None, [])`` if no part of the family is persistent (the caller
+            then fails on the bare subject, as a plain reader would)
+
+        Raises:
+            MessengerReaderConfigError: the family is split between storages (the bare subject
+                apart from the keyed ones, or the keyed ones among themselves) - no single
+                reader can deliver it whole, and a part of it would be a silent lie
+        """
+        storages: dict[str, list[str]] = {}  # storage -> family patterns it holds messages of
+        for pattern in subject_family(self.subject):
+            for storage in await self.connection.subject_storages(pattern):
+                storages.setdefault(storage, []).append(pattern)
+        if len(storages) > 1:
+            places = ', '.join(f"{' and '.join(patterns)} in '{storage}'" for storage, patterns in storages.items())
+            raise MessengerReaderConfigError(
+                f"The subject family of '{self.subject}' is stored in several places ({places}) and cannot "
+                f"be read as one. Store the family together, or read its parts with separate readers")
+        for storage, patterns in storages.items():
+            return storage, patterns
+        return None, []
+
+    async def _verify_family_filters(self, subscription, consumer_info, filters: list[str]) -> None:
+        """Makes sure the server enforces the family filters, removes the consumer otherwise
+
+        A server which does not know multiple subject filters (NATS < 2.10)
+        ignores them and would deliver every message of the storage, not the family.
+
+        Raises:
+            MessengerReaderConfigError: the server did not apply the filters
+        """
+        config = consumer_info.config
+        enforced = config.filter_subjects or ([config.filter_subject] if config.filter_subject else [])
+        if set(enforced) == set(filters):
+            return
+        try:
+            await subscription.unsubscribe()
+            await self.connection.js.delete_consumer(stream=consumer_info.stream_name, consumer=consumer_info.name)
+        except Exception as e:
+            log.warning(f"{self} could not remove the unfiltered consumer: {e}")
+        raise MessengerReaderConfigError(
+            f"The server does not filter the subject family of '{self.subject}' (asked for {filters}, "
+            f"got {enforced or 'no filter'}). Subject families on persistent subjects need NATS server 2.10 or newer")
 
     async def _reopen(self) -> None:
         """Reopens the pull subscription with retry logic and better error handling"""
@@ -742,7 +767,7 @@ class MsgReader(MsgDriver):
 
         # Remove MsgReader-specific parameters that are not part of ConsumerConfig
         # These are handled by MsgReader itself, not passed to NATS
-        reader_params = ['nowait', 'error_behavior', 'on_missed_messages']
+        reader_params = ['nowait', 'error_behavior', 'on_missed_messages', 'family']
         for param in reader_params:
             cfg.pop(param, None)
 

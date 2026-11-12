@@ -28,6 +28,12 @@ this will install `nats-py` package.
 - Custom JetStream API replacing nats-py private internals access
 
 ## Changes
+* 2.3.1 Subjects, not streams: `get_publisher(subject, persistent=True)` guarantees that published means stored
+  (`MessengerNotPersisted`, checked on `open()`); publishing to a subject nobody stores now warns instead of
+  passing silently. Subject families (`family=True` on readers: a subject and everything below it) and
+  `get_kvreader(..., nowait=True)`. See [Subjects](doc/concepts.md#subjects-persistent-and-volatile).
+  Removed the unused `MsgReader.next_msg()` (an orphaned internal helper returning raw client-library messages;
+  use `read_next()`).
 * 2.3 **Breaking:** exceptions of the NATS client library (`nats.errors.*`) no longer leak from the
   Messenger API - every error is a `ServerishError` (see [Error handling](doc/concepts.md#error-handling)).
   Replace `except nats.errors...` handlers around serverish calls. `raise_on_publish_error=False`

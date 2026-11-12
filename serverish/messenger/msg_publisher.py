@@ -7,7 +7,7 @@ import nats.errors
 import nats.js
 import param
 
-from serverish.base import MessengerNotConnected, MessengerPublishAckTimeout
+from serverish.base import MessengerNotConnected, MessengerNotPersisted, MessengerPublishAckTimeout
 from serverish.connection.nats_errors import translate_nats_error
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver, log
@@ -26,7 +26,16 @@ class MsgPublisher(MsgDriver):
     common case when the client event loop is starved and the ack is simply
     processed too late), the retry is discarded by the server.
 
+    The publisher is meant for *persistent* subjects: messages published are
+    stored by the server and can be read later (for fire-and-forget messages
+    on volatile subjects use `MsgCorePub`). With ``persistent=True`` this is a
+    guarantee: `open()` verifies that the subject is persistent and `publish()`
+    fails with `MessengerNotPersisted` if the message was not stored. Without
+    it (the default until serverish 3.0) a message nobody stored is reported
+    with a warning, once per publisher, and the publish counts as done.
+
     Parameters:
+        persistent (bool): Require the subject to be persistent (default `False`, `True` in serverish 3.0)
         raise_on_publish_error (bool): Raise on publish error (default `True`). When `False`, errors
             (a missing connection included) are logged and reported in the returned message instead
         ack_timeout_retries (int): How many times to retry a publish for which no JetStream
@@ -42,6 +51,8 @@ class MsgPublisher(MsgDriver):
         - last_error: Last error encountered
     """
 
+    persistent = param.Boolean(default=False, doc="Require the subject to be persistent: fail on open() and "
+                                                  "publish() if published messages are not stored")
     raise_on_publish_error = param.Boolean(default=True, doc="Raise on publish error")
     ack_timeout_retries = param.Integer(default=2, bounds=(0, None),
                                         doc="Retries when JetStream ack does not arrive in time; "
@@ -53,7 +64,20 @@ class MsgPublisher(MsgDriver):
         self._error_count: int = 0
         self._last_publish_time: float | None = None
         self._last_error: Exception | None = None
+        self._warned_not_persistent: bool = False
         super().__init__(**kwargs)
+
+    async def open(self) -> None:
+        """Opens the publisher; with ``persistent=True`` verifies that the subject is persistent
+
+        Raises:
+            MessengerNotPersisted: (``persistent=True`` only) messages published to the subject would not be stored
+            MessengerNotConnected: (``persistent=True`` only) no connection to verify through
+            MessengerTransportError: (``persistent=True`` only) the server could not be asked
+        """
+        if self.persistent and not await self.messenger.is_persistent(self.subject):
+            raise MessengerNotPersisted(self.subject)
+        await super().open()
 
     async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
         """Publishes a messages to publisher subject
@@ -66,6 +90,7 @@ class MsgPublisher(MsgDriver):
             dict: published message, or message to be published with the `error` tag in meta if failed
         Raises:
             MessengerNotConnected: no connection to publish through
+            MessengerNotPersisted: (``persistent=True`` only) the message was not stored
             MessengerPublishAckTimeout: JetStream did not confirm the publish (after retries)
             MessengerTransportError: any other failure of the underlying NATS client
             jsonschema.ValidationError: the message does not match its schema (always raised)
@@ -93,14 +118,30 @@ class MsgPublisher(MsgDriver):
             # Track successful publish
             self._publish_count += 1
             self._last_publish_time = time.monotonic()
-        except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError):
-            # it's OK for non-jetstream, we just don't have subscribers yet
-            # Still count as successful publish (message was sent, just no stream to persist)
+        except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError) as e:
+            # nobody stored the message: the subject is not persistent
+            if self.persistent:
+                error = MessengerNotPersisted(self.subject)
+                self._error_count += 1
+                self._last_error = error
+                log.error(f"Message {msg['meta']['id']} not stored. {error}")
+                if self.raise_on_publish_error:
+                    raise error from e
+                msg['meta']['tags'].append('error')
+                msg['meta']['status'] = str(error)
+                return msg
+            # Legacy leniency (until 3.0): the message was sent, count it as published
             self._publish_count += 1
             self._last_publish_time = time.monotonic()
-            log.debug(
-                f'No subscribers yet returned by NATS server for subject {self.subject}, '
-                f'if it was meant to be jetstream, the subject does not exist in any stream!')
+            if not self._warned_not_persistent:
+                self._warned_not_persistent = True
+                log.warning(
+                    f"Publishing to subject '{self.subject}' which is not persistent - messages are NOT stored "
+                    f"(reported once per publisher). If they should be, configure persistence for the subject "
+                    f"and create the publisher with persistent=True to fail loudly; for fire-and-forget "
+                    f"messages use get_corepublisher(). This becomes an error in serverish 3.0")
+            else:
+                log.debug(f"Message {msg['meta']['id']} published to non-persistent subject '{self.subject}'")
         except Exception as e:
             error = translate_nats_error(e, f"Publishing message {msg['meta']['id']} to '{self.subject}' failed")
             self._error_count += 1
@@ -177,14 +218,16 @@ class MsgPublisher(MsgDriver):
         }
 
 
-def get_publisher(subject) -> MsgPublisher:
+def get_publisher(subject, persistent: bool = False) -> MsgPublisher:
     """Returns a publisher for a given subject
 
     Args:
         subject (str): subject to publish to
+        persistent (bool): require the subject to be persistent - `open()` and `publish()` raise
+            `MessengerNotPersisted` if published messages would not be stored (default in serverish 3.0)
 
     Returns:
         Publisher: a publisher for the given subject
 
     """
-    return Messenger.get_publisher(subject)
+    return Messenger.get_publisher(subject, persistent=persistent)

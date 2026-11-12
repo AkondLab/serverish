@@ -103,6 +103,26 @@ class MessengerRequestNoResultYet(MessengerRequestNoResponse):
     pass
 
 
+class MessengerNotPersisted(ServerishError):
+    """Raised when a message published as persistent has not been (or would not be) stored
+
+    Subjects are either *persistent* (published messages are stored and can
+    be read later) or *volatile* (delivered to whoever listens at the moment).
+    A publisher created with ``persistent=True`` promises that "published"
+    means "stored" - this exception says the subject is not persistent.
+
+    Remedy: configure persistence for the subject on the server, or publish
+    with a volatile publisher (`get_corepublisher`) if the message is meant
+    to be fire-and-forget.
+    """
+
+    def __init__(self, subject: str) -> None:
+        super().__init__(f"Subject '{subject}' is not persistent: messages published to it are not stored. "
+                         f"Configure persistence for the subject on the server, "
+                         f"or use a volatile publisher (get_corepublisher) for fire-and-forget messages")
+        self.subject = subject
+
+
 class MessengerPublishAckTimeout(MessengerTransportTimeout):
     """Raised when JetStream did not confirm a publish within the ack timeout.
 
