@@ -16,7 +16,7 @@ import param
 from nats.js import JetStreamContext
 from nats.js.api import DeliverPolicy, ConsumerConfig
 
-from serverish.base import wait_for_psce
+from serverish.base import BurstLog, wait_for_psce
 from serverish.base.exceptions import (MessengerReaderStopped, MessengerReaderConfigError,
                                        MessengerNotConnected, MessengerJetStreamError,
                                        MessengerReaderAlreadyOpen, MessengerRequestTimeout)
@@ -28,6 +28,9 @@ from serverish.messenger.policies import (UNLIMITED, BatchPolicy, DeliveryPolicy
                                           OnError, RetryPolicy)
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
+# Connection trouble is noticed by all readers of the application at the same moment:
+# the first one warns in full, the others are summed up
+burst_log = BurstLog(log)
 
 class _ReconnectNeededError(Exception):
     pass
@@ -303,7 +306,8 @@ class MsgReader(MsgDriver):
             async def ensure_open(self) -> None:
                 if not self.reader.is_open:
                     if self.reader._expect_beeing_open:
-                        log.warning(self.fmt("The reader is not open, but once it has been, trying to reopen"))
+                        burst_log.warning("Reader not open, reopening",
+                                          self.fmt("The reader is not open, but once it has been, trying to reopen"))
                     await self.reader.open()  # exceptions handled by the async_shield decorator
                     if self.reader.is_open:
                         self.reader._expect_beeing_open = True
@@ -340,12 +344,14 @@ class MsgReader(MsgDriver):
                         # Consumer exists and is accessible
                         log.debug(self.fmt(f"Consumer health check OK: {ci.name}"))
                     except nats.js.errors.NotFoundError:
-                        log.warning(self.fmt("Consumer has gone (detected by health check), recreating"))
+                        burst_log.warning("Consumer has gone",
+                                          self.fmt("Consumer has gone (detected by health check), recreating"))
                         await self.reader._reopen()
                         log.info(self.fmt(f"Consumer re-opened after health check detected loss"))
                         raise self.ContinueException('reopen')
                     except Exception as e:
-                        log.warning(self.fmt(f"Error during consumer health check: {e}, will try to recreate"))
+                        burst_log.warning("Consumer health check failed",
+                                          self.fmt(f"Error during consumer health check: {e}, will try to recreate"))
                         await self.reader._reopen()
                         log.info(self.fmt(f"Consumer re-opened after health check error"))
                         raise self.ContinueException('reopen')
@@ -404,18 +410,14 @@ class MsgReader(MsgDriver):
                                     log.debug(self.fmt(f"Received {len(new_msgs)} new message(s)"))
                                     break
                             except asyncio.TimeoutError:
-                                # Timeout is normal - verify consumer still exists before next cycle
-                                try:
-                                    await self.reader.pull_subscription.consumer_info()
-                                except nats.js.errors.NotFoundError:
-                                    log.warning(self.fmt("Consumer expired during wait, recreating"))
-                                    await self.reader._reopen()
-                                    raise self.ContinueException('consumer_expired_during_wait')
-                                except Exception as e:
-                                    log.warning(self.fmt(f"Error checking consumer during wait: {e}"))
-                                    # Continue to next cycle, will be handled by health check
+                                # Timeout is normal. The consumer may have expired meanwhile, but asking
+                                # the server after every cycle is a JetStream API request per reader
+                                # every 2 s; the periodic health check asks often enough.
+                                if time.monotonic() - self.last_consumer_check > self.consumer_check_interval:
+                                    break  # back to the main loop: ensure_consumer() runs the health check
                             except Exception as e:
-                                log.warning(self.fmt(f"Error waiting for messages: {e}"))
+                                burst_log.warning("Waiting for messages failed",
+                                                  self.fmt(f"Error waiting for messages: {e}"))
                                 break  # Exit loop on other errors
 
                     self.reader.messages.extend(new_msgs)
@@ -512,7 +514,8 @@ class MsgReader(MsgDriver):
                                 raise e.error
                             raise error from e.error
                         wait_time = self._retry.delay_for(st.n)
-                        log.warning(st.fmt(f"read_next error, (retry in {wait_time:.1f}s): {e.error}"))
+                        burst_log.warning("Reading failed, retrying",
+                                          st.fmt(f"read_next error, (retry in {wait_time:.1f}s): {e.error}"))
                         await asyncio.sleep(wait_time)
                     case _:  # should not be reached
                         log.error(st.fmt(f"Invalid on_connection_close value {self.error_behavior}. "
@@ -596,7 +599,8 @@ class MsgReader(MsgDriver):
                 log.warning(f"{self} No end-of-data signal within {timeout}s backstop, "
                             f"returning {len(msgs)} messages (no num_pending metadata? network issue?)")
             else:
-                log.warning(f"{self} Timeout after {timeout}s waiting for server response (network issue?)")
+                burst_log.warning("No server response",
+                                  f"{self} Timeout after {timeout}s waiting for server response (network issue?)")
 
         while True:
             remaining = timeout - (time.monotonic() - start_time)
@@ -873,7 +877,8 @@ class MsgReader(MsgDriver):
                     raise
                 
                 wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
-                log.warning(f"Reopen attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
+                burst_log.warning("Reopening the reader failed, retrying",
+                                  f"{self} Reopen attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
                 await asyncio.sleep(wait_time)
 
 

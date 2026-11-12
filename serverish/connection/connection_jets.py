@@ -257,7 +257,9 @@ class ConnectionJetStream(ConnectionNATS):
         try:
             info = await js.streams_info()
             if not info:
-                return StatusReport.error(msg='Zero streams in NATS')
+                # not a failure of the connection: nothing is stored on this server (yet),
+                # whether a subject is persistent is asked per subject (`is_subject_persistent`)
+                return StatusReport.warning(msg='No streams in NATS, no subject is persistent')
         except Exception as e:
             return StatusReport.error(msg=f'Error getting streams info: {e}')
         return StatusReport.ok(msg='Stream(s) exist')

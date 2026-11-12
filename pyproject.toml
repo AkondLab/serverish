@@ -23,7 +23,6 @@ dns = ["aiodns"]
 pytest = ">=9.1,<10"
 pytest-asyncio = "^1.4"
 nats-py = "^2.6.0"
-jupyter = "*"
 rich = ">=13.5.2"
 aiodns = ">=3.1.1,<5"
 testcontainers = {extras = ["nats"], version = "^4.14.2"}

@@ -33,6 +33,11 @@ this will install `nats-py` package.
   driver lifecycle fixes (closed drivers leave the Messenger tree); deprecates
   `get_singlepublisher`/`get_singlereader` and publishing on never-opened publishers.
   See the [Messenger user guide](doc/messenger.md).
+* 2.3.2 Quieter and more honest logs when the connection is in trouble: an idle reader no longer asks the server
+  about its consumer every 2 s (only the periodic health check does), a warning raised by many readers at once
+  is logged once with a summary of the rest, `Messenger.open()` giving up logs one warning (no traceback, no
+  false "backgrounding"). `Messenger.is_open` is true on a server which stores nothing yet. After a failed `open()` the Messenger
+  is closed, so `open()` can be called again.
 * 2.3.1 Subjects, not streams: `get_publisher(subject, persistent=True)` guarantees that published means stored
   (`MessengerNotPersisted`, checked on `open()`); publishing to a subject nobody stores now warns instead of
   passing silently. Subject families (`family=True` on readers: a subject and everything below it) and
