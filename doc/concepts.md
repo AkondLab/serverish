@@ -63,6 +63,79 @@ Lookup the table below to choose the right class for your needs.
 | `NatsJournalLoggingHandler` |                         | `logger.log` `logger.info` etc.                                         |                                                                                                                                                                                                                                                                 |
 
 
+### Subjects: persistent and volatile
+Serverish speaks about *subjects*. How the server stores them (streams, consumers, sequence numbers) is its
+own business and does not appear in the API. A subject is either
+
+* **persistent** - published messages are stored and can be read later (`get_publisher`, `get_reader`, ...), or
+* **volatile** - messages reach whoever listens at the moment (`get_corepublisher`, `get_corereader`, RPC).
+
+Which subjects are persistent is configured on the server, not by the application. A publisher can demand it:
+
+```python
+pub = get_publisher('data.ofp.zb08.camera.raw', persistent=True)
+await pub.open()      # MessengerNotPersisted here, if messages to this subject would not be stored
+await pub.publish(data={...})   # published means stored
+```
+
+Without `persistent=True` a message nobody stored is only reported with a warning (once per publisher) and the
+publish counts as done. This leniency is kept for compatibility and ends in serverish 3.0, where persistent
+becomes the default. `await Messenger().is_persistent(subject)` answers the question directly.
+
+### Subject families
+A subject may be extended with further tokens, typically a record key: `event.sroca.camk.self.processed` and
+`event.sroca.camk.self.processed.<file>`. A reader of the *family* gets the subject itself and everything
+below it, but never its siblings:
+
+```python
+reader = get_reader('event.sroca.camk.self.processed', family=True, nowait=True)
+async for data, meta in reader:
+    print(meta['nats']['subject'], data)   # the actual subject of each message
+```
+
+Available on `get_reader`, `get_callbacksubscriber`, `get_corereader` and `get_coresubscriber`. Combined with
+`deliver_policy='last_per_subject'` it returns the latest message per key - a keyed collection, the
+persistent-subject twin of a KV bucket. (Persistent families need NATS server 2.10 or newer.)
+
+For KV buckets the matching "current state, then finish" read is `get_kvreader(bucket, nowait=True)`.
+
+### Error handling
+Every error reported by the Messenger API is a `ServerishError` (`serverish.base`). Exceptions of the NATS
+client library never leave serverish - there is no need to import, or even know, `nats.errors`.
+
+```python
+from serverish.base import ServerishError, MessengerNotConnected
+
+try:
+    await publisher.publish(data={'state': 'closing'})
+except MessengerNotConnected:
+    ...  # no connection (never opened, closed, draining, no server)
+except ServerishError as e:
+    ...  # anything else serverish can report; `e.__cause__` keeps the underlying error
+```
+
+| Exception                     | Meaning                                                                                  |
+|-------------------------------|------------------------------------------------------------------------------------------|
+| `MessengerNotConnected`       | Operation needs a connection which is not there                                          |
+| `MessengerTransportError`     | Base of all failures of the underlying NATS client                                       |
+| `MessengerConnectionClosed`   | Connection closed / draining / stale (also a `MessengerNotConnected`)                    |
+| `MessengerOutboundBufferFull` | Client outbound buffer overflow, typically while reconnecting                            |
+| `MessengerJetStreamError`     | JetStream API refused or failed the request (`code`, `err_code`, `description`)          |
+| `MessengerTransportTimeout`   | Server did not answer in time (also a `TimeoutError`)                                    |
+| `MessengerNotPersisted`       | A publisher with `persistent=True` found that messages to its subject are not stored    |
+| `MessengerPublishAckTimeout`  | JetStream did not confirm a publish - the message MAY have been stored                   |
+| `MessengerRequestTimeout`     | No response to an RPC request, or to a consumer creation, in time                        |
+
+Publishers with `raise_on_publish_error=False` (the default of journal and progress publishers) do not raise
+these: the error is logged and reported in the returned message (`error` tag and `status` in meta).
+`jsonschema.ValidationError` is the only non-serverish exception raised on purpose - an invalid message is
+a programming error, not a runtime condition.
+
+*Upgrading from serverish < 2.3:* raw `nats.errors.*` exceptions used to leak from the Messenger API.
+Handlers catching them (`except nats.errors.Error`, `except nats.errors.TimeoutError`,
+`except nats.errors.ConnectionClosedError`...) no longer match - catch `ServerishError`
+(or `MessengerNotConnected`, the builtin `TimeoutError`...) instead.
+
 # Logging to the nats server (Messanger)
 For writing Journal entries - human-readable messages, use `MsgJournalPublisher` class or use python logging.
 

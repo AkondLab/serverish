@@ -130,3 +130,15 @@ async def test_sync_callback_returning_none_keeps_subscription_alive(messenger, 
             f"Sync callback returning None must not stop the loop. "
             f"Received {len(received)}/5: {received}"
         )
+
+
+@pytest.mark.nats
+async def test_callback_subscribers_do_not_share_stop_event(messenger, unique_subject):
+    """Issue #34: stopping one subscriber must not stop the others (nor the ones created later)"""
+    from serverish.messenger import get_callbacksubscriber
+    first = get_callbacksubscriber(f'{unique_subject}.a')
+    second = get_callbacksubscriber(f'{unique_subject}.b')
+    assert first._stop_event is not second._stop_event
+    await first.stop()
+    assert not second._stop_event.is_set()
+    assert not get_callbacksubscriber(f'{unique_subject}.c')._stop_event.is_set()
