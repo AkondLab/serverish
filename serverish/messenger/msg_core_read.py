@@ -91,10 +91,19 @@ class MsgCoreReader(MsgDriver):
         if self._reconnect_cb is not None:
             self.connection.remove_reconnect_cb(self._reconnect_cb)
             self._reconnect_cb = None
-        subscriptions, self.subscriptions = self.subscriptions, []
-        with nats_errors_translated(f"Unsubscribing from '{self.subject}' failed"):
-            for subscription in subscriptions:
-                await subscription.unsubscribe()
+        # Every subscription gets its attempt; one which could not be removed stays
+        # on the list, so a repeated close() can finish the job
+        failure: Exception | None = None
+        for subscription in list(self.subscriptions):
+            try:
+                with nats_errors_translated(f"Unsubscribing from '{self.subject}' failed"):
+                    await subscription.unsubscribe()
+            except Exception as e:
+                failure = failure or e
+                continue
+            self.subscriptions.remove(subscription)
+        if failure is not None:
+            raise failure
         return await super().close()
 
     # ------------------------------------------------------------------

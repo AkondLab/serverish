@@ -666,6 +666,10 @@ class MsgReader(MsgDriver):
             the stream storing the family and the family patterns it covers;
             ``(None, [])`` if no part of the family is persistent (the caller
             then fails on the bare subject, as a plain reader would)
+
+        Raises:
+            MessengerReaderConfigError: the family is split between two storages -
+                no single reader can deliver it whole, and a part of it would be a silent lie
         """
         js = self.connection.js
         stream: str | None = None
@@ -675,12 +679,13 @@ class MsgReader(MsgDriver):
                 found = await js.find_stream_name_by_subject(pattern)
             except nats.js.errors.NotFoundError:
                 continue
-            if stream is None:
-                stream = found
-            if found == stream:
-                covered.append(pattern)
-            else:
-                log.warning(f"{self} subject family is split between storages, '{pattern}' is not read")
+            if stream is not None and found != stream:
+                raise MessengerReaderConfigError(
+                    f"The subject family of '{self.subject}' is stored in two places ('{covered[0]}' in "
+                    f"'{stream}', '{pattern}' in '{found}') and cannot be read as one. "
+                    f"Store the family together, or read its parts with separate readers")
+            stream = found
+            covered.append(pattern)
         return stream, covered
 
     async def _verify_family_filters(self, subscription, consumer_info, filters: list[str]) -> None:

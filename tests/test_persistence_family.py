@@ -320,3 +320,49 @@ async def test_kv_reader_nowait_stays_finished(messenger):
                 assert await asyncio.wait_for(_collect(reader), timeout=5) == {'a': {'v': 1}, 'b': {'v': 2}}
     finally:
         await Messenger().connection.js.delete_key_value(bucket)
+
+
+@pytest.mark.nats_js
+async def test_family_split_between_storages_is_rejected_not_read_in_part(messenger):
+    """A family whose bare subject and keyed subjects live in different storages cannot
+    be read by one reader - half of it presented as the whole would be a silent lie"""
+    from nats.js.api import StreamConfig
+    from serverish.base import MessengerReaderConfigError
+    js = Messenger().connection.js
+    name = f"famsplit{uuid.uuid4().hex[:8]}"
+    base = f'{name}.item'
+    await js.add_stream(StreamConfig(name=f'{name}_bare', subjects=[base], storage='memory'))
+    await js.add_stream(StreamConfig(name=f'{name}_keys', subjects=[f'{base}.>'], storage='memory'))
+    try:
+        await _publish(base, {'n': 0})
+        await _publish(f'{base}.key', {'n': 1})
+        reader = get_reader(base, deliver_policy='all', nowait=True, family=True)
+        with pytest.raises(MessengerReaderConfigError, match='two places'):
+            await reader.open()
+        assert not reader.is_open
+        # each part is still readable on its own
+        for subject, expected in ((base, [0]), (f'{base}.>', [1])):
+            part = get_reader(subject, deliver_policy='all', nowait=True)
+            assert [data['n'] async for data, _ in part] == expected
+            await part.close()
+    finally:
+        await js.delete_stream(f'{name}_bare')
+        await js.delete_stream(f'{name}_keys')
+
+
+@pytest.mark.nats
+async def test_family_core_reader_close_can_be_retried(messenger, volatile_subject):
+    """A subscription which could not be removed is kept, so a repeated close() finishes the cleanup"""
+    import nats.errors
+    from serverish.base import MessengerConnectionClosed
+    reader = get_corereader(f'{volatile_subject}.item', family=True)
+    await reader.open()
+    first, second = reader.subscriptions
+    with mock.patch.object(first, 'unsubscribe', mock.AsyncMock(side_effect=nats.errors.ConnectionClosedError())):
+        with pytest.raises(MessengerConnectionClosed):
+            await reader.close()
+    assert reader.subscriptions == [first], "the failed one is kept, the other one is gone"
+    assert second._closed
+    await reader.close()
+    assert reader.subscriptions == [] and first._closed
+    assert not reader.is_open
