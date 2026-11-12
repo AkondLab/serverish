@@ -27,6 +27,7 @@ _CONNECTION_GONE = (
     nats.errors.ConnectionDrainingError,
     nats.errors.ConnectionReconnectingError,
     nats.errors.StaleConnectionError,
+    nats.errors.UnexpectedEOF,  # a StaleConnectionError subclass today - listed so the mapping does not depend on it
     nats.errors.NoServersError,
 )
 
