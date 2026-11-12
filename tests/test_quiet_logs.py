@@ -142,7 +142,11 @@ async def test_open_giving_up_logs_one_warning_and_no_traceback(nats_server, rec
         warnings = [r.getMessage() for r in ours if r.levelno == logging.WARNING]
         assert len(warnings) == 1 and 'giving up' in warnings[0]
         assert not [r for r in ours if 'background' in r.getMessage().lower()]
-    finally:
-        await msg.close()
+        # the failed attempt leaves the Messenger closed: open() works again without close()
+        assert not msg.is_open
         await msg.open(host=nats_server['host'], port=nats_server['port'])
-    assert msg.is_open
+        assert msg.is_open
+    finally:
+        if not msg.is_open:
+            await msg.close()
+            await msg.open(host=nats_server['host'], port=nats_server['port'])

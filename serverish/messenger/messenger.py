@@ -145,6 +145,10 @@ class Messenger(Singleton):
             await self.opener_task.wait_for(timeout)
         except asyncio.TimeoutError:
             log.warning(f"Could not connect to NATS {con.host}:{con.port} within {timeout}s, giving up")
+            # the attempt is over: leave the Messenger closed, so open() can be called again
+            if self.conn is con:
+                await con.disconnect()
+                self.conn = None
             return
         except asyncio.CancelledError:
             log.warning(f"Cancelled connecting to NATS {con.host}:{con.port}")
