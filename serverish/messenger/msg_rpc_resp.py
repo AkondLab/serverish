@@ -8,6 +8,8 @@ from typing import Callable
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
 
+from serverish.base import MessengerNotConnected
+from serverish.connection.nats_errors import nats_errors_translated
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
 
@@ -44,7 +46,8 @@ class Rpc:
         messenger = Messenger() # this is singleton anyway
         msg = messenger.create_msg(data=self.resp_data, meta=self.resp_meta)
         bmsg = messenger.encode(msg)
-        await self.nats_msg.respond(bmsg)
+        with nats_errors_translated(f"Responding to request on '{self.nats_msg.subject}' failed"):
+            await self.nats_msg.respond(bmsg)
 
 
 class MsgRpcResponder(MsgDriver):
@@ -120,9 +123,9 @@ class MsgRpcResponder(MsgDriver):
 
     async def _register_function_internal(self, callback: Callable[[Rpc], None] | Callable[[Rpc], asyncio.Future]):
         """Internal method to register the callback with NATS subscription"""
-        from nats.aio.client import Client as NATS
-
-        nats: NATS = self.connection.nc
+        nc = self.connection.nc
+        if nc is None:
+            raise MessengerNotConnected(f"Cannot subscribe RPC responder for '{self.subject}', NATS not connected")
         if asyncio.iscoroutinefunction(callback):
             acb = callback
             scb = None
@@ -152,13 +155,15 @@ class MsgRpcResponder(MsgDriver):
                 await rpc.send_response()
 
 
-        self.subscription = await nats.subscribe(self.subject, queue=self.subject, cb=_cb)
+        with nats_errors_translated(f"Subscribing RPC responder for '{self.subject}' failed"):
+            self.subscription = await nc.subscribe(self.subject, queue=self.subject, cb=_cb)
 
     async def close(self) -> None:
         """Close the responder and unregister from reconnection callbacks"""
         self.connection.remove_reconnect_cb(self.on_nats_reconnect)
         if self.subscription is not None:
-            await self.subscription.unsubscribe()
+            with nats_errors_translated(f"Unsubscribing RPC responder for '{self.subject}' failed"):
+                await self.subscription.unsubscribe()
         self._callback = None  # Clear callback reference
         return await super().close()
 

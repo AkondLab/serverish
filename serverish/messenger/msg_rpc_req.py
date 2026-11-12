@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 from asyncio import CancelledError
 
-from nats.errors import NoRespondersError, TimeoutError
+import nats.errors
 
 from serverish.base import MessengerRequestNoResponders, MessengerRequestCanceled, MessengerRequestNoResultYet, \
-    MessengerRequestTimeout, MessengerRequestJetStreamSubject
+    MessengerRequestTimeout, MessengerRequestJetStreamSubject, MessengerNotConnected
+from serverish.connection.nats_errors import nats_errors_translated
 from serverish.base import Task, create_task
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
@@ -44,18 +45,21 @@ class MsgRpcRequester(MsgDriver):
         Raises:
             MessengerRequestNoResponders: if no responders were found for the request
             MessengerRequestTimeout: if no response was received in time
+            MessengerNotConnected: no connection to send the request through
+            MessengerTransportError: any other failure of the underlying NATS client
         """
-        from nats.aio.client import Client as NATS
-
-        nats: NATS = self.connection.nc
+        nc = self.connection.nc
+        if nc is None:
+            raise MessengerNotConnected(f"Request to '{self.subject}' failed. NATS not connected")
         msg = self.messenger.create_msg(data, meta=meta)
         bmsg = self.messenger.encode(msg)
-        try:
-            resp = await nats.request(self.subject, payload=bmsg, timeout=timeout)
-        except NoRespondersError as e:
-            raise MessengerRequestNoResponders(e)
-        except TimeoutError as e:
-            raise MessengerRequestTimeout(e)
+        with nats_errors_translated(f"Request to '{self.subject}' failed"):
+            try:
+                resp = await nc.request(self.subject, payload=bmsg, timeout=timeout)
+            except nats.errors.NoRespondersError as e:
+                raise MessengerRequestNoResponders(f"No responders for request to '{self.subject}'") from e
+            except nats.errors.TimeoutError as e:
+                raise MessengerRequestTimeout(f"No response to request to '{self.subject}' in time") from e
         rdata, rmeta = self.messenger.unpack_nats_msg(resp)
         if rmeta is None:
             raise MessengerRequestJetStreamSubject(self.subject)

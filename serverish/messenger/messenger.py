@@ -28,7 +28,8 @@ from serverish.base.idmanger import gen_id, gen_uid
 from serverish.base.manageable import Manageable
 from serverish.messenger.msgvalidator import MsgValidator
 from serverish.base.singleton import Singleton
-from serverish.base import MessengerCannotConnect
+from serverish.base import MessengerCannotConnect, MessengerNotConnected
+from serverish.connection.nats_errors import nats_errors_translated
 
 if TYPE_CHECKING:
     from serverish.messenger.msg_publisher import MsgPublisher
@@ -63,7 +64,8 @@ class Messenger(Singleton):
     @property
     def connection(self) -> ConnectionJetStream:
         if self.conn is None:
-            raise ValueError("Messenger connection have not been opened, use configure(host, port) first")
+            raise MessengerNotConnected("Messenger connection has not been opened, "
+                                        "use Messenger().open(host, port) or Messenger().context(host, port) first")
         return self.conn
 
     async def open(self, host: str | None = None, port: int | None = None,
@@ -319,8 +321,11 @@ class Messenger(Singleton):
 
     async def purge(self, subject: str) -> None:
         js = self.connection.js
-        stream = await js.find_stream_name_by_subject(subject)
-        await js.purge_stream(stream, subject=subject)
+        if js is None:
+            raise MessengerNotConnected(f"Cannot purge subject '{subject}', JetStream not connected")
+        with nats_errors_translated(f"Purging subject '{subject}' failed"):
+            stream = await js.find_stream_name_by_subject(subject)
+            await js.purge_stream(stream, subject=subject)
 
     @staticmethod
     def get_publisher(subject: str) -> "MsgPublisher":

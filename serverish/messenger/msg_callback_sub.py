@@ -21,7 +21,12 @@ class MsgCallbackSubscriber(MsgReader):
     """
     callback = param.Callable(default=None, doc="Callback function to call on each message")
     task = param.ClassSelector(default=None, class_=Task, doc="Task for reading messages")
-    _stop_event = param.ClassSelector(default=Event(), class_=Event, doc="Event to stop reading messages")
+
+    def __init__(self, *args, **kwargs) -> None:
+        # per instance: a class-level default would be one Event shared by all subscribers,
+        # stopping one would stop them all
+        self._stop_event: Event = Event()
+        super().__init__(*args, **kwargs)
 
     async def open(self) -> None:
         return await super().open()

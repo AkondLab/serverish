@@ -8,6 +8,7 @@ import nats.js
 import param
 
 from serverish.base import MessengerNotConnected, MessengerPublishAckTimeout
+from serverish.connection.nats_errors import translate_nats_error
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver, log
 
@@ -26,7 +27,8 @@ class MsgPublisher(MsgDriver):
     processed too late), the retry is discarded by the server.
 
     Parameters:
-        raise_on_publish_error (bool): Raise on publish error, default `True` re-raises underlying exceptions
+        raise_on_publish_error (bool): Raise on publish error (default `True`). When `False`, errors
+            (a missing connection included) are logged and reported in the returned message instead
         ack_timeout_retries (int): How many times to retry a publish for which no JetStream
             ack arrived in time (default 2). Retries are deduplicated server-side via
             ``Nats-Msg-Id``. When retries are exhausted, `MessengerPublishAckTimeout` is
@@ -63,8 +65,14 @@ class MsgPublisher(MsgDriver):
         Returns:
             dict: published message, or message to be published with the `error` tag in meta if failed
         Raises:
-            Raises nats errors if the message could not be published until `raise_on_publish_error` is set to True
-            otherwise logs the error, and returns the message with the `error` tag and `status` set to the error message.
+            MessengerNotConnected: no connection to publish through
+            MessengerPublishAckTimeout: JetStream did not confirm the publish (after retries)
+            MessengerTransportError: any other failure of the underlying NATS client
+            jsonschema.ValidationError: the message does not match its schema (always raised)
+
+            With `raise_on_publish_error` set to False the serverish errors above are not raised:
+            the error is logged and the message is returned with the `error` tag and `status`
+            set to the error message.
         """
         msg = self.messenger.create_msg(data, meta)
         bdata = self.messenger.encode(msg)
@@ -85,11 +93,6 @@ class MsgPublisher(MsgDriver):
             # Track successful publish
             self._publish_count += 1
             self._last_publish_time = time.monotonic()
-        except AttributeError as e:  # no js - not connected
-            self._error_count += 1
-            self._last_error = e
-            log.error(f"Trying to publish to subject '{self.subject}' failed. JetStream not connected")
-            raise MessengerNotConnected(f"Trying to publish to subject '{self.subject}' failed. JetStream not connected")
         except (nats.errors.NoRespondersError, nats.js.errors.NoStreamResponseError):
             # it's OK for non-jetstream, we just don't have subscribers yet
             # Still count as successful publish (message was sent, just no stream to persist)
@@ -99,15 +102,18 @@ class MsgPublisher(MsgDriver):
                 f'No subscribers yet returned by NATS server for subject {self.subject}, '
                 f'if it was meant to be jetstream, the subject does not exist in any stream!')
         except Exception as e:
+            error = translate_nats_error(e, f"Publishing message {msg['meta']['id']} to '{self.subject}' failed")
             self._error_count += 1
-            self._last_error = e
+            self._last_error = error
             log.error(f"Trying to publish to subject '{self.subject}' failed. "
-                      f"Message {msg['meta']['id']} publish error: {e}")
+                      f"Message {msg['meta']['id']} publish error: {error}")
             if self.raise_on_publish_error:
-                raise e
+                if error is e:
+                    raise e
+                raise error from e
             else:
                 msg['meta']['tags'].append('error')
-                msg['meta']['status'] = str(e)
+                msg['meta']['status'] = str(error)
         return msg
 
     async def _publish_with_ack_retries(self, bdata: bytes, headers: dict, msg_id: str, **kwargs) -> None:
@@ -119,11 +125,16 @@ class MsgPublisher(MsgDriver):
         Nats-Msg-Id header, so this never produces duplicates.
 
         Raises:
+            MessengerNotConnected: JetStream is not connected
             MessengerPublishAckTimeout: no ack after all retries
         """
+        js = self.connection.js
+        if js is None:
+            raise MessengerNotConnected(f"Trying to publish to subject '{self.subject}' failed. "
+                                        f"JetStream not connected")
         for attempt in range(self.ack_timeout_retries + 1):
             try:
-                await self.connection.js.publish(self.subject, bdata, headers=headers, **kwargs)
+                await js.publish(self.subject, bdata, headers=headers, **kwargs)
                 return
             except nats.errors.TimeoutError as e:
                 if attempt < self.ack_timeout_retries:

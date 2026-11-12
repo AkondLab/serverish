@@ -19,9 +19,10 @@ from nats.js.api import DeliverPolicy, ConsumerConfig
 
 from serverish.base import wait_for_psce
 from serverish.base.exceptions import (MessengerReaderStopped, MessengerReaderConfigError,
-                                       MessengerNotConnected,
+                                       MessengerNotConnected, MessengerJetStreamError,
                                        MessengerReaderAlreadyOpen, MessengerRequestTimeout)
 from serverish.base.fifoset import FifoSet
+from serverish.connection.nats_errors import nats_errors_translated, translate_nats_error
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
 
@@ -141,6 +142,11 @@ class MsgReader(MsgDriver):
         Only stop signal and Cancel exception finish the iteration.
         One may change this behavior by setting `on_connection_close` to 'RAISE' or 'FINISH'.
         This will cause raising exception or finishing iteration on seruios erros.
+
+        Raises:
+            MessengerReaderStopped: the reader has been stopped (or finished, see `nowait`)
+            MessengerReaderConfigError: the server rejected the reader configuration, retrying is pointless
+            MessengerTransportError: (`error_behavior='RAISE'` only) failure of the underlying NATS client
         """
 
         # The reader loop's state and methods
@@ -401,8 +407,10 @@ class MsgReader(MsgDriver):
                 # Fatal NATS API errors (4xx): the same request will never
                 # succeed — stop retrying immediately and surface a clear
                 # MessengerReaderConfigError to the caller.
-                if isinstance(e.error, (nats.js.errors.BadRequestError,
-                                        nats.js.errors.NotFoundError)):
+                # (open() reports client errors translated, the original is its cause)
+                cause = e.error.__cause__ if isinstance(e.error, MessengerJetStreamError) else e.error
+                if isinstance(cause, (nats.js.errors.BadRequestError,
+                                      nats.js.errors.NotFoundError)):
                     log.error(st.fmt(f"fatal NATS error (not retrying): {e.error}"))
                     self._stop.set()
                     raise MessengerReaderConfigError(
@@ -411,7 +419,10 @@ class MsgReader(MsgDriver):
                 match self.error_behavior:
                     case 'RAISE':
                         log.error(st.fmt(f"raising read_next error:  {e.error}"))
-                        raise e.error
+                        error = translate_nats_error(e.error, f"Reading from '{self.subject}' failed")
+                        if error is e.error:
+                            raise e.error
+                        raise error from e.error
                     case 'FINISH':
                         log.error(st.fmt(f"finishing iteration on error: {e.error}"))
                         raise MessengerReaderStopped
@@ -622,6 +633,14 @@ class MsgReader(MsgDriver):
             ps._pending_next_msgs_calls.pop(task_name, None)
 
     async def open(self) -> None:
+        """Opens the reader: creates the JetStream consumer and subscribes to it
+
+        Raises:
+            MessengerReaderAlreadyOpen: the reader is open already
+            MessengerNotConnected: no connection to subscribe through
+            MessengerRequestTimeout: the server did not create the consumer in time
+            MessengerTransportError: any other failure of the underlying NATS client
+        """
         if self.pull_subscription is not None:
             raise MessengerReaderAlreadyOpen("Reader already open, do not reuse MsgReader instances")
 
@@ -652,13 +671,15 @@ class MsgReader(MsgDriver):
         # consumer_conf.durable_name = self.name if consumer_conf.durable_name is None else consumer_conf.durable_name
         if self.connection is None or self.connection.js is None:
             raise MessengerNotConnected('Cannot create pull subscription, not connected to NATS')
-        try:
-            ret = await self.connection.js.pull_subscribe(self.subject,
-                                                           durable=consumer_conf.durable_name,
-                                                           config=consumer_conf)
-        except TimeoutError as e:
-            raise MessengerRequestTimeout(e)
-        ci = await ret.consumer_info()
+        with nats_errors_translated(f"Creating consumer for '{self.subject}' failed"):
+            try:
+                ret = await self.connection.js.pull_subscribe(self.subject,
+                                                               durable=consumer_conf.durable_name,
+                                                               config=consumer_conf)
+            except nats.errors.TimeoutError as e:
+                raise MessengerRequestTimeout(
+                    f"Creating consumer for '{self.subject}' timed out: {e}") from e
+            ci = await ret.consumer_info()
         return ret
 
     async def _reopen(self) -> None:

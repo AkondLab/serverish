@@ -13,6 +13,57 @@ class MessengerCannotConnect(ServerishError):
     pass
 
 class MessengerNotConnected(ServerishError):
+    """Raised when an operation needs a NATS connection which is not there
+
+    Either the Messenger has not been opened, or the connection is gone
+    (see `MessengerConnectionClosed`).
+    """
+    pass
+
+
+class MessengerTransportError(ServerishError):
+    """Raised when the underlying NATS client fails to carry out an operation
+
+    Common base of all errors translated from the NATS client library. The
+    original exception is always available as ``__cause__``; serverish users
+    are not expected to inspect it, nor to know the client library at all.
+    """
+    pass
+
+
+class MessengerConnectionClosed(MessengerTransportError, MessengerNotConnected):
+    """Raised when the NATS connection is closed, draining, stale or has no server to talk to"""
+    pass
+
+
+class MessengerOutboundBufferFull(MessengerTransportError):
+    """Raised when the client's outbound buffer overflows
+
+    Typically the connection is down (reconnecting) and messages published
+    in the meantime no longer fit the pending buffer.
+    """
+    pass
+
+
+class MessengerJetStreamError(MessengerTransportError):
+    """Raised when the JetStream API refuses or fails a request
+
+    Attributes:
+        code (int | None): HTTP-like status of the response (e.g. 404, 503)
+        err_code (int | None): JetStream specific error code
+        description (str | None): server-side error description
+    """
+
+    def __init__(self, *args, code: int | None = None, err_code: int | None = None,
+                 description: str | None = None) -> None:
+        super().__init__(*args)
+        self.code = code
+        self.err_code = err_code
+        self.description = description
+
+
+class MessengerTransportTimeout(MessengerTransportError, TimeoutError):
+    """Raised when the NATS server did not answer in time"""
     pass
 
 class MessengerReaderStopped(ServerishError):
@@ -52,7 +103,7 @@ class MessengerRequestNoResultYet(MessengerRequestNoResponse):
     pass
 
 
-class MessengerPublishAckTimeout(ServerishError, TimeoutError):
+class MessengerPublishAckTimeout(MessengerTransportTimeout):
     """Raised when JetStream did not confirm a publish within the ack timeout.
 
     The message MAY have been delivered and stored — only the acknowledgement

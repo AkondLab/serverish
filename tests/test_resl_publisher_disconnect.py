@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from serverish.base import ServerishError
 from serverish.messenger import Messenger, get_publisher, get_reader
 from tests.conftest import wait_for_healthy
 
@@ -174,8 +175,9 @@ async def test_publisher_raises_during_disconnect(resilience_messenger, nats_dis
         await _force_disconnect_detection(m, timeout=10)
 
         # --- 3. VERIFY DEGRADED ---
-        # With raise_on_publish_error=True, publishing should raise an exception
-        with pytest.raises(Exception) as exc_info:
+        # With raise_on_publish_error=True, publishing should raise - a serverish
+        # exception, never a raw one of the NATS client library (issue #45)
+        with pytest.raises(ServerishError) as exc_info:
             await pub.publish(data={'phase': 'during_disconnect'})
         logger.info('DEGRADED verified: publish raised %s: %s',
                      type(exc_info.value).__name__, exc_info.value)

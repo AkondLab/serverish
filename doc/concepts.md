@@ -63,6 +63,42 @@ Lookup the table below to choose the right class for your needs.
 | `NatsJournalLoggingHandler` |                         | `logger.log` `logger.info` etc.                                         |                                                                                                                                                                                                                                                                 |
 
 
+### Error handling
+Every error reported by the Messenger API is a `ServerishError` (`serverish.base`). Exceptions of the NATS
+client library never leave serverish - there is no need to import, or even know, `nats.errors`.
+
+```python
+from serverish.base import ServerishError, MessengerNotConnected
+
+try:
+    await publisher.publish(data={'state': 'closing'})
+except MessengerNotConnected:
+    ...  # no connection (never opened, closed, draining, no server)
+except ServerishError as e:
+    ...  # anything else serverish can report; `e.__cause__` keeps the underlying error
+```
+
+| Exception                     | Meaning                                                                                  |
+|-------------------------------|------------------------------------------------------------------------------------------|
+| `MessengerNotConnected`       | Operation needs a connection which is not there                                          |
+| `MessengerTransportError`     | Base of all failures of the underlying NATS client                                       |
+| `MessengerConnectionClosed`   | Connection closed / draining / stale (also a `MessengerNotConnected`)                    |
+| `MessengerOutboundBufferFull` | Client outbound buffer overflow, typically while reconnecting                            |
+| `MessengerJetStreamError`     | JetStream API refused or failed the request (`code`, `err_code`, `description`)          |
+| `MessengerTransportTimeout`   | Server did not answer in time (also a `TimeoutError`)                                    |
+| `MessengerPublishAckTimeout`  | JetStream did not confirm a publish - the message MAY have been stored                   |
+| `MessengerRequestTimeout`     | No response to an RPC request, or to a consumer creation, in time                        |
+
+Publishers with `raise_on_publish_error=False` (the default of journal and progress publishers) do not raise
+these: the error is logged and reported in the returned message (`error` tag and `status` in meta).
+`jsonschema.ValidationError` is the only non-serverish exception raised on purpose - an invalid message is
+a programming error, not a runtime condition.
+
+*Upgrading from serverish < 2.3:* raw `nats.errors.*` exceptions used to leak from the Messenger API.
+Handlers catching them (`except nats.errors.Error`, `except nats.errors.TimeoutError`,
+`except nats.errors.ConnectionClosedError`...) no longer match - catch `ServerishError`
+(or `MessengerNotConnected`, the builtin `TimeoutError`...) instead.
+
 # Logging to the nats server (Messanger)
 For writing Journal entries - human-readable messages, use `MsgJournalPublisher` class or use python logging.
 
