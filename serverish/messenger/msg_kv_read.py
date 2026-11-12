@@ -19,6 +19,10 @@ class MsgKvReader(MsgKvDriver):
     Delete/purge markers are yielded as (None, meta) with
     meta['kv']['operation'] set to 'DEL'/'PURGE' (unless ignore_deletes is set).
 
+    With ``nowait=True`` the iteration finishes once the values existing at
+    open() have been delivered - a snapshot of the current state of the bucket,
+    the same meaning `nowait` has on `MsgReader`.
+
     Usage:
         reader = get_kvreader('bucket', key='telescope.>')
         await reader.open()
@@ -28,6 +32,8 @@ class MsgKvReader(MsgKvDriver):
     key = param.String(default='>', doc="Key or wildcard pattern to watch")
     include_history = param.Boolean(default=False, doc="Deliver historical revisions of the keys on open")
     ignore_deletes = param.Boolean(default=False, doc="Skip delete/purge markers")
+    nowait = param.Boolean(default=False, doc="Finish the iteration once the values existing at open() "
+                                              "have been delivered, instead of waiting for further changes")
 
     def __init__(self, **kwargs) -> None:
         self._watcher: KeyValue.KeyWatcher | None = None
@@ -60,6 +66,8 @@ class MsgKvReader(MsgKvDriver):
                 entry = await self._watcher.__anext__()  # raises StopAsyncIteration when watcher is stopped
             if entry is None:
                 # nats-py sends a None marker once the initial replay is done, it is not a value
+                if self.nowait:
+                    raise StopAsyncIteration  # the current state has been delivered, that is all we were asked for
                 continue
             return self.decode_entry(entry)
 
@@ -73,7 +81,7 @@ def get_kvreader(bucket: str, key: str = '>', **kwargs) -> MsgKvReader:
     Args:
         bucket (str): KV bucket name
         key (str): key or wildcard pattern to watch
-        kwargs: additional driver arguments (e.g. include_history, ignore_deletes)
+        kwargs: additional driver arguments (e.g. include_history, ignore_deletes, nowait)
 
     Returns:
         MsgKvReader: a KV reader for the given bucket

@@ -9,7 +9,9 @@ import nats.js.errors
 from nats.js import JetStreamContext
 import param
 
+from serverish.base.exceptions import MessengerKvBucketNotFound, MessengerNotConnected
 from serverish.connection.connection_nats import ConnectionNATS
+from serverish.connection.nats_errors import nats_errors_translated
 from serverish.base.status import StatusReport
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -148,6 +150,26 @@ class ConnectionJetStream(ConnectionNATS):
         cfg.subjects.append(subject)
         await js.update_stream(config=cfg)
 
+    async def is_subject_persistent(self, subject: str) -> bool:
+        """Tells whether messages published to the subject are stored (the subject is covered by a stream)
+
+        Raises:
+            MessengerNotConnected: no connection to ask through
+            MessengerTransportError: the server could not be asked
+        """
+        js = self._require_js(f"Cannot check persistence of subject '{subject}'")
+        with nats_errors_translated(f"Checking persistence of subject '{subject}' failed"):
+            try:
+                await js.find_stream_name_by_subject(subject)
+            except nats.js.errors.NotFoundError:
+                return False
+        return True
+
+    def _require_js(self, context: str) -> JetStreamContext:
+        if self.js is None:
+            raise MessengerNotConnected(f"{context}, JetStream not connected")
+        return self.js
+
     async def ensure_kv_bucket(self, bucket: str, create_if_needed: bool = False, **config):
         """Binds to a JetStream KV bucket, optionally creating it.
 
@@ -164,16 +186,21 @@ class ConnectionJetStream(ConnectionNATS):
             nats.js.kv.KeyValue: bound KV bucket handle
 
         Raises:
-            nats.js.errors.BucketNotFoundError: bucket does not exist and create_if_needed is False
+            MessengerKvBucketNotFound: bucket does not exist and create_if_needed is False
+            MessengerNotConnected: no connection to bind through
+            MessengerTransportError: any other failure of the underlying NATS client
         """
-        js: JetStreamContext = self.js
-        try:
-            return await js.key_value(bucket)
-        except nats.js.errors.BucketNotFoundError:
-            if not create_if_needed:
-                raise
-            logger.info(f"Creating KV bucket {bucket}")
-            return await js.create_key_value(bucket=bucket, **config)
+        js = self._require_js(f"Cannot open KV bucket '{bucket}'")
+        with nats_errors_translated(f"Opening KV bucket '{bucket}' failed"):
+            try:
+                return await js.key_value(bucket)
+            except nats.js.errors.BucketNotFoundError as e:
+                if not create_if_needed:
+                    raise MessengerKvBucketNotFound(
+                        f"KV bucket '{bucket}' does not exist, "
+                        f"create it externally or open it with create_bucket=True") from e
+                logger.info(f"Creating KV bucket {bucket}")
+                return await js.create_key_value(bucket=bucket, **config)
 
 
     async def diagnose_stream_config(self) -> StatusReport:

@@ -327,18 +327,31 @@ class Messenger(Singleton):
             stream = await js.find_stream_name_by_subject(subject)
             await js.purge_stream(stream, subject=subject)
 
+    async def is_persistent(self, subject: str) -> bool:
+        """Tells whether the subject is persistent: messages published to it are stored and can be read later
+
+        The opposite is a volatile subject, delivered only to whoever listens at the moment.
+
+        Raises:
+            MessengerNotConnected: no connection to ask through
+            MessengerTransportError: the server could not be asked
+        """
+        return await self.connection.is_subject_persistent(subject)
+
     @staticmethod
-    def get_publisher(subject: str) -> "MsgPublisher":
+    def get_publisher(subject: str, persistent: bool = False) -> "MsgPublisher":
         """Returns a publisher for a given subject
 
         Args:
             subject (str): subject to publish to
+            persistent (bool): require the subject to be persistent - `open()` and `publish()` raise
+                `MessengerNotPersisted` if published messages would not be stored
 
         Returns:
             MsgPublisher: message publisher
         """
         from serverish.messenger.msg_publisher import MsgPublisher
-        return MsgPublisher(subject=subject, parent=Messenger())
+        return MsgPublisher(subject=subject, parent=Messenger(), persistent=persistent)
 
     @staticmethod
     def get_reader(subject: str,
@@ -352,7 +365,7 @@ class Messenger(Singleton):
             deliver_policy (str): deliver policy, one of 'all', 'last', 'new', 'by_start_time', will be passed to consumer config
             opt_start_time (datetime): start time for 'by_start_time' deliver policy, will be passed to consumer config, must carry TZ info
             kwargs: additional arguments to pass to the reader and underlying NATS consumer config
-                    MsgReader-specific params (nowait, error_behavior, on_missed_messages) are extracted
+                    MsgReader-specific params (nowait, error_behavior, on_missed_messages, family) are extracted
                     and passed directly to MsgReader; remaining params go to consumer_cfg
 
         Returns:
@@ -368,7 +381,7 @@ class Messenger(Singleton):
         # Extract MsgReader-specific parameters
         reader_params = {}
         consumer_cfg = {}
-        reader_param_names = {'nowait', 'error_behavior', 'on_missed_messages'}
+        reader_param_names = {'nowait', 'error_behavior', 'on_missed_messages', 'family'}
 
         for key, value in kwargs.items():
             if key in reader_param_names:
@@ -584,7 +597,7 @@ class Messenger(Singleton):
         return MsgCorePub(subject=subject, parent=Messenger())
 
     @staticmethod
-    def get_corereader(subject: str) -> 'MsgCoreReader':
+    def get_corereader(subject: str, family: bool = False) -> 'MsgCoreReader':
         """Returns a core NATS reader (async iterator) for a given subject (no JetStream)
 
         Use this for subjects that are not backed by a JetStream stream.
@@ -596,10 +609,10 @@ class Messenger(Singleton):
             MsgCoreReader: a core-NATS async iterator for the given subject
         """
         from serverish.messenger.msg_core_read import MsgCoreReader
-        return MsgCoreReader(subject=subject, parent=Messenger())
+        return MsgCoreReader(subject=subject, parent=Messenger(), family=family)
 
     @staticmethod
-    def get_coresubscriber(subject: str) -> 'MsgCoreSub':
+    def get_coresubscriber(subject: str, family: bool = False) -> 'MsgCoreSub':
         """Returns a core NATS subscriber for a given subject (no JetStream)
 
         Use this for fire-and-forget subjects that are not backed by a JetStream stream.
@@ -611,7 +624,7 @@ class Messenger(Singleton):
             MsgCoreSub: a core-NATS subscriber for the given subject
         """
         from serverish.messenger.msg_core_sub import MsgCoreSub
-        return MsgCoreSub(subject=subject, parent=Messenger())
+        return MsgCoreSub(subject=subject, parent=Messenger(), family=family)
 
     @staticmethod
     def get_commandpublisher(subject: str) -> 'MsgCommandPublisher':
@@ -690,6 +703,23 @@ class Messenger(Singleton):
         """
         from serverish.messenger.msg_kv_sub import MsgKvSubscriber
         return MsgKvSubscriber(bucket=bucket, key=key, parent=Messenger(), **kwargs)
+
+
+def subject_family(subject: str) -> list[str]:
+    """Returns the subscription patterns of a subject family: the subject itself and everything below it
+
+    A family is a subject together with all subjects extending it with further
+    tokens, e.g. ``a.b`` with ``a.b.c`` and ``a.b.c.d`` - but not its sibling
+    ``a.x``. No single pattern selects that (``a.b.>`` requires at least one
+    more token), hence two.
+
+    Raises:
+        ValueError: the subject ends with the ``>`` wildcard, which already takes everything below
+    """
+    if subject.split('.')[-1] == '>':
+        raise ValueError(f"Subject '{subject}' ends with '>' - it takes everything below already, "
+                         f"a family of it makes no sense")
+    return [subject, f'{subject}.>']
 
 
 class MsgDriver(Manageable):

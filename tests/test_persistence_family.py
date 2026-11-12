@@ -1,0 +1,224 @@
+"""Subjects, not streams (issue #49): the persistence contract of publishers,
+subject-family readers and the KV reader which finishes.
+
+None of the public API exercised here mentions streams, consumers, filters
+or sequence numbers.
+"""
+from __future__ import annotations
+
+import asyncio
+import uuid
+from unittest import mock
+
+import pytest
+
+from serverish.base import MessengerNotPersisted, ServerishError
+from serverish.messenger import (Messenger, get_publisher, get_reader, get_corepublisher, get_corereader,
+                                 get_callbacksubscriber, get_kvstore, get_kvreader)
+from serverish.messenger import msg_publisher
+from serverish.messenger.messenger import subject_family
+
+
+@pytest.fixture
+def volatile_subject(request):
+    """A subject no stream covers (the test stream takes 'test.>')"""
+    return f'test_no_js.{request.node.name}.{uuid.uuid4().hex[:8]}'
+
+
+# ---------------------------------------------------------------------------
+# Persistence contract
+# ---------------------------------------------------------------------------
+
+@pytest.mark.nats_js
+async def test_is_persistent(messenger, unique_subject, volatile_subject):
+    assert await Messenger().is_persistent(unique_subject) is True
+    assert await Messenger().is_persistent(volatile_subject) is False
+
+
+@pytest.mark.nats_js
+async def test_persistent_publisher_on_persistent_subject(messenger, unique_subject):
+    async with get_publisher(unique_subject, persistent=True) as pub:
+        msg = await pub.publish(data={'v': 1})
+    assert 'error' not in msg['meta']['tags']
+    reader = get_reader(unique_subject, deliver_policy='all', nowait=True)
+    assert [data async for data, _ in reader] == [{'v': 1}]
+    await reader.close()
+
+
+@pytest.mark.nats_js
+async def test_persistent_publisher_refuses_to_open_on_volatile_subject(messenger, volatile_subject):
+    """A misconfigured service fails at startup, not on its first message"""
+    pub = get_publisher(volatile_subject, persistent=True)
+    with pytest.raises(MessengerNotPersisted) as ei:
+        await pub.open()
+    assert not pub.is_open
+    assert ei.value.subject == volatile_subject
+    assert volatile_subject in str(ei.value)
+    assert isinstance(ei.value, ServerishError)
+
+
+@pytest.mark.nats_js
+async def test_persistent_publish_fails_when_message_is_not_stored(messenger, volatile_subject):
+    """Also without open() (or if persistence is lost later): published must mean stored"""
+    pub = get_publisher(volatile_subject, persistent=True)
+    with pytest.raises(MessengerNotPersisted):
+        await pub.publish(data={'v': 1})
+    assert pub.health_status['error_count'] == 1
+    assert pub.health_status['publish_count'] == 0
+
+    pub.raise_on_publish_error = False
+    msg = await pub.publish(data={'v': 1})
+    assert 'error' in msg['meta']['tags']
+    assert 'not persistent' in msg['meta']['status']
+
+
+@pytest.mark.nats_js
+async def test_default_publisher_warns_once_about_volatile_subject(messenger, volatile_subject):
+    """2.x default: the legacy leniency stays, but it is no longer silent"""
+    pub = get_publisher(volatile_subject)
+    with mock.patch.object(msg_publisher.log, 'warning') as warning:
+        async with pub:
+            for _ in range(3):
+                msg = await pub.publish(data={'v': 1})
+                assert 'error' not in msg['meta']['tags']
+    assert warning.call_count == 1, "one warning per publisher, not per message"
+    assert volatile_subject in warning.call_args.args[0]
+    assert 'not persistent' in warning.call_args.args[0]
+    assert pub.health_status['publish_count'] == 3
+
+
+@pytest.mark.nats_js
+async def test_default_publisher_is_quiet_on_persistent_subject(messenger, unique_subject):
+    with mock.patch.object(msg_publisher.log, 'warning') as warning:
+        async with get_publisher(unique_subject) as pub:
+            await pub.publish(data={'v': 1})
+    warning.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Subject family
+# ---------------------------------------------------------------------------
+
+def test_subject_family_patterns():
+    assert subject_family('a.b.c') == ['a.b.c', 'a.b.c.>']
+    assert subject_family('a.*.c') == ['a.*.c', 'a.*.c.>']
+    with pytest.raises(ValueError):
+        subject_family('a.b.>')
+
+
+def test_family_of_everything_below_is_rejected_at_construction():
+    with pytest.raises(ValueError):
+        get_reader('test.x.>', family=True)
+    with pytest.raises(ValueError):
+        get_corereader('test_no_js.x.>', family=True)
+
+
+async def _publish(subject: str, data: dict, core: bool = False) -> None:
+    pub = get_corepublisher(subject) if core else get_publisher(subject, persistent=True)
+    async with pub:
+        await pub.publish(data=data)
+
+
+@pytest.mark.nats_js
+async def test_family_reader_takes_subject_and_suffixes_but_not_siblings(messenger, unique_subject):
+    base = f'{unique_subject}.item'
+    await _publish(base, {'n': 0})
+    await _publish(f'{base}.key1', {'n': 1})
+    await _publish(f'{base}.key2.deeper', {'n': 2})
+    await _publish(f'{unique_subject}.itemx', {'n': 'sibling'})
+    await _publish(f'{unique_subject}.other', {'n': 'sibling'})
+
+    reader = get_reader(base, deliver_policy='all', nowait=True, family=True)
+    received = [(meta['nats']['subject'], data['n']) async for data, meta in reader]
+    await reader.close()
+    assert received == [(base, 0), (f'{base}.key1', 1), (f'{base}.key2.deeper', 2)]
+
+    # without family: the bare subject only, as always
+    reader = get_reader(base, deliver_policy='all', nowait=True)
+    assert [data['n'] async for data, _ in reader] == [0]
+    await reader.close()
+
+
+@pytest.mark.nats_js
+async def test_family_with_last_per_subject_is_a_keyed_collection(messenger, unique_subject):
+    """Latest message per key - the persistent-subject twin of a KV bucket"""
+    base = f'{unique_subject}.processed'
+    await _publish(f'{base}.file_a', {'state': 'started'})
+    await _publish(f'{base}.file_b', {'state': 'started'})
+    await _publish(f'{base}.file_a', {'state': 'done'})
+
+    reader = get_reader(base, deliver_policy='last_per_subject', nowait=True, family=True)
+    latest = {meta['nats']['subject'].rsplit('.', 1)[-1]: data['state'] async for data, meta in reader}
+    await reader.close()
+    assert latest == {'file_a': 'done', 'file_b': 'started'}
+
+
+@pytest.mark.nats_js
+async def test_family_callback_subscriber(messenger, unique_subject):
+    base = f'{unique_subject}.item'
+    received = []
+    done = asyncio.Event()
+
+    async def on_message(data, meta):
+        received.append(meta['nats']['subject'])
+        if len(received) == 2:
+            done.set()
+
+    sub = get_callbacksubscriber(base, deliver_policy='new', family=True)
+    await sub.open()
+    try:
+        await sub.subscribe(on_message)
+        await asyncio.sleep(0.3)
+        await _publish(f'{unique_subject}.sibling', {})
+        await _publish(base, {})
+        await _publish(f'{base}.key', {})
+        await asyncio.wait_for(done.wait(), timeout=8)
+    finally:
+        await sub.close()
+    assert received == [base, f'{base}.key']
+
+
+@pytest.mark.nats
+async def test_family_core_reader(messenger, volatile_subject):
+    base = f'{volatile_subject}.item'
+    reader = get_corereader(base, family=True)
+    async with reader:
+        await _publish(f'{volatile_subject}.itemx', {'n': 'sibling'}, core=True)
+        await _publish(base, {'n': 0}, core=True)
+        await _publish(f'{base}.key', {'n': 1}, core=True)
+        received = []
+        for _ in range(2):
+            data, meta = await asyncio.wait_for(reader.read_next(), timeout=5)
+            received.append((meta['nats']['subject'], data['n']))
+    assert sorted(received) == [(base, 0), (f'{base}.key', 1)]
+
+
+# ---------------------------------------------------------------------------
+# KV reader which finishes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.nats_js
+async def test_kv_reader_nowait_delivers_current_state_and_finishes(messenger):
+    bucket = f"test-kv-{uuid.uuid4().hex[:8]}"
+    try:
+        async with get_kvstore(bucket, create_bucket=True) as store:
+            # empty bucket: nothing to deliver, the iteration just ends
+            async with get_kvreader(bucket, nowait=True) as reader:
+                assert await asyncio.wait_for(_collect(reader), timeout=5) == {}
+
+            await store.put('file_a', {'state': 'started'})
+            await store.put('file_b', {'state': 'done'})
+            await store.put('file_a', {'state': 'done'})
+
+            async with get_kvreader(bucket, nowait=True) as reader:
+                state = await asyncio.wait_for(_collect(reader), timeout=5)
+            assert state == {'file_a': {'state': 'done'}, 'file_b': {'state': 'done'}}
+
+            async with get_kvreader(bucket, key='file_b', nowait=True) as reader:
+                assert await asyncio.wait_for(_collect(reader), timeout=5) == {'file_b': {'state': 'done'}}
+    finally:
+        await Messenger().connection.js.delete_key_value(bucket)
+
+
+async def _collect(reader) -> dict:
+    return {meta['kv']['key']: data async for data, meta in reader}

@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import param
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
 
 from serverish.base.exceptions import MessengerReaderStopped, MessengerNotConnected
 from serverish.connection.nats_errors import nats_errors_translated
-from serverish.messenger.messenger import MsgDriver
+from serverish.messenger.messenger import MsgDriver, subject_family
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -42,12 +43,23 @@ class MsgCoreReader(MsgDriver):
             await reader.close()
     """
 
+    family = param.Boolean(default=False,
+                           doc="Read the subject family: the subject and all subjects extending it with "
+                               "further tokens")
+
     def __init__(self, **kwargs) -> None:
         self._queue: asyncio.Queue | None = None
         self._stop: asyncio.Event = asyncio.Event()
-        self.subscription: Subscription | None = None
+        self.subscriptions: list[Subscription] = []
         self._reconnect_cb = None
         super().__init__(**kwargs)
+        if self.family:
+            subject_family(self.subject)  # validates: fails early for a subject which cannot have a family
+
+    @property
+    def subscription(self) -> Subscription | None:
+        """The underlying subscription (the first one, a subject family uses two)"""
+        return self.subscriptions[0] if self.subscriptions else None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -79,10 +91,10 @@ class MsgCoreReader(MsgDriver):
         if self._reconnect_cb is not None:
             self.connection.remove_reconnect_cb(self._reconnect_cb)
             self._reconnect_cb = None
-        if self.subscription is not None:
-            with nats_errors_translated(f"Unsubscribing from '{self.subject}' failed"):
-                await self.subscription.unsubscribe()
-            self.subscription = None
+        subscriptions, self.subscriptions = self.subscriptions, []
+        with nats_errors_translated(f"Unsubscribing from '{self.subject}' failed"):
+            for subscription in subscriptions:
+                await subscription.unsubscribe()
         return await super().close()
 
     # ------------------------------------------------------------------
@@ -105,8 +117,11 @@ class MsgCoreReader(MsgDriver):
                 return
             await self._queue.put((data, meta))
 
+        # a subject family takes two subscriptions feeding one queue: no single
+        # pattern matches both 'a.b' and 'a.b.c'
+        patterns = subject_family(self.subject) if self.family else [self.subject]
         with nats_errors_translated(f"Subscribing to '{self.subject}' failed"):
-            self.subscription = await nc.subscribe(self.subject, cb=_cb)
+            self.subscriptions = [await nc.subscribe(pattern, cb=_cb) for pattern in patterns]
 
     # ------------------------------------------------------------------
     # Reading
@@ -147,13 +162,15 @@ class MsgCoreReader(MsgDriver):
             raise StopAsyncIteration
 
 
-def get_corereader(subject: str) -> 'MsgCoreReader':
+def get_corereader(subject: str, family: bool = False) -> 'MsgCoreReader':
     """Returns a core NATS reader (async iterator) for a given subject (no JetStream)
 
     Use this for subjects that are not backed by a JetStream stream.
 
     Args:
         subject (str): subject to subscribe to
+        family (bool): read the subject family - the subject itself and all subjects extending it
+            with further tokens, but not its siblings
 
     Returns:
         MsgCoreReader: a core-NATS async iterator for the given subject
@@ -166,4 +183,4 @@ def get_corereader(subject: str) -> 'MsgCoreReader':
                     print(data, meta)
     """
     from serverish.messenger import Messenger
-    return Messenger.get_corereader(subject=subject)
+    return Messenger.get_corereader(subject=subject, family=family)

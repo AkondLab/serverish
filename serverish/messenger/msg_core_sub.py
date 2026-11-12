@@ -89,7 +89,7 @@ class MsgCoreSub(MsgCoreReader):
         return await super().close()
 
 
-def get_coresubscriber(subject: str) -> 'MsgCoreSub':
+def get_coresubscriber(subject: str, family: bool = False) -> 'MsgCoreSub':
     """Returns a core NATS subscriber for a given subject (no JetStream)
 
     Use this for fire-and-forget subjects that are not backed by a JetStream stream.
@@ -113,4 +113,4 @@ def get_coresubscriber(subject: str) -> 'MsgCoreSub':
             await sub.close()
     """
     from serverish.messenger import Messenger
-    return Messenger.get_coresubscriber(subject=subject)
+    return Messenger.get_coresubscriber(subject=subject, family=family)
