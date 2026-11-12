@@ -19,6 +19,7 @@ import param
 from nats.js.kv import KeyValue
 
 from serverish.base import MessengerKvBucketNotFound, MessengerKvMalformed, dt_ensure_array
+from serverish.connection.nats_errors import nats_errors_translated
 from serverish.messenger.messenger import MsgDriver
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
@@ -48,14 +49,15 @@ class MsgKvDriver(MsgDriver):
             self.subject = f'$KV.{self.bucket}'  # diagnostic only, KV entries are addressed by bucket/key
 
     async def open(self) -> None:
-        try:
-            self.kv = await self.connection.ensure_kv_bucket(self.bucket,
-                                                             create_if_needed=self.create_bucket,
-                                                             **self.bucket_config)
-        except nats.js.errors.BucketNotFoundError as e:
-            raise MessengerKvBucketNotFound(
-                f"KV bucket '{self.bucket}' does not exist, "
-                f"create it externally or open the driver with create_bucket=True") from e
+        with nats_errors_translated(f"Opening KV bucket '{self.bucket}' failed"):
+            try:
+                self.kv = await self.connection.ensure_kv_bucket(self.bucket,
+                                                                 create_if_needed=self.create_bucket,
+                                                                 **self.bucket_config)
+            except nats.js.errors.BucketNotFoundError as e:
+                raise MessengerKvBucketNotFound(
+                    f"KV bucket '{self.bucket}' does not exist, "
+                    f"create it externally or open the driver with create_bucket=True") from e
         await super().open()
 
     async def close(self) -> None:

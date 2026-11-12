@@ -5,6 +5,7 @@ import jsonschema
 import param
 
 from serverish.base import MessengerNotConnected
+from serverish.connection.nats_errors import translate_nats_error
 from serverish.messenger.messenger import MsgDriver, log
 
 
@@ -15,7 +16,8 @@ class MsgCorePub(MsgDriver):
     on subjects that are not backed by a JetStream stream.
 
     Parameters:
-        raise_on_publish_error (bool): Raise on publish error, default ``True`` re-raises underlying exceptions
+        raise_on_publish_error (bool): Raise on publish error (default ``True``). When ``False``, errors
+            (a missing connection included) are logged and reported in the returned message instead
     """
 
     raise_on_publish_error = param.Boolean(default=True, doc="Raise on publish error")
@@ -32,7 +34,11 @@ class MsgCorePub(MsgDriver):
 
         Raises:
             MessengerNotConnected: if the NATS connection is not available
-            jsonschema.ValidationError: if the message fails schema validation
+            MessengerTransportError: any other failure of the underlying NATS client
+            jsonschema.ValidationError: if the message fails schema validation (always raised)
+
+            With ``raise_on_publish_error`` set to False the serverish errors above are not raised:
+            the error is logged and the message is returned with the ``error`` tag.
         """
         from serverish.messenger import Messenger
         messenger: Messenger = self.messenger
@@ -51,22 +57,19 @@ class MsgCorePub(MsgDriver):
                     f"Trying to publish to subject '{self.subject}' failed. NATS not connected"
                 )
             await nc.publish(self.subject, bdata)
-        except MessengerNotConnected:
-            raise
-        except AttributeError:
-            raise MessengerNotConnected(
-                f"Trying to publish to subject '{self.subject}' failed. NATS not connected"
-            )
         except Exception as e:
+            error = translate_nats_error(e, f"Publishing message {msg['meta']['id']} to '{self.subject}' failed")
             log.error(
                 f"Trying to publish to subject '{self.subject}' failed. "
-                f"Message {msg['meta']['id']} publish error: {e}"
+                f"Message {msg['meta']['id']} publish error: {error}"
             )
             if self.raise_on_publish_error:
-                raise e
+                if error is e:
+                    raise e
+                raise error from e
             else:
                 msg['meta']['tags'].append('error')
-                msg['meta']['status'] = str(e)
+                msg['meta']['status'] = str(error)
         return msg
 
 

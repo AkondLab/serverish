@@ -6,7 +6,8 @@ import logging
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
 
-from serverish.base.exceptions import MessengerReaderStopped
+from serverish.base.exceptions import MessengerReaderStopped, MessengerNotConnected
+from serverish.connection.nats_errors import nats_errors_translated
 from serverish.messenger.messenger import MsgDriver
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
@@ -79,7 +80,8 @@ class MsgCoreReader(MsgDriver):
             self.connection.remove_reconnect_cb(self._reconnect_cb)
             self._reconnect_cb = None
         if self.subscription is not None:
-            await self.subscription.unsubscribe()
+            with nats_errors_translated(f"Unsubscribing from '{self.subject}' failed"):
+                await self.subscription.unsubscribe()
             self.subscription = None
         return await super().close()
 
@@ -90,6 +92,8 @@ class MsgCoreReader(MsgDriver):
     async def _do_subscribe(self) -> None:
         """(Re-)create the raw NATS subscription, routing messages into the queue."""
         nc = self.connection.nc
+        if nc is None:
+            raise MessengerNotConnected(f"Cannot subscribe to '{self.subject}', NATS not connected")
 
         async def _cb(nats_msg: Msg) -> None:
             if self._queue is None:
@@ -101,7 +105,8 @@ class MsgCoreReader(MsgDriver):
                 return
             await self._queue.put((data, meta))
 
-        self.subscription = await nc.subscribe(self.subject, cb=_cb)
+        with nats_errors_translated(f"Subscribing to '{self.subject}' failed"):
+            self.subscription = await nc.subscribe(self.subject, cb=_cb)
 
     # ------------------------------------------------------------------
     # Reading

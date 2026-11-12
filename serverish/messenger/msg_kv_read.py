@@ -4,6 +4,7 @@ import param
 from nats.js.kv import KeyValue
 
 from serverish.base import MessengerReaderStopped
+from serverish.connection.nats_errors import nats_errors_translated
 from serverish.messenger.messenger import Messenger
 from serverish.messenger.msg_kv import MsgKvDriver, log
 
@@ -34,9 +35,10 @@ class MsgKvReader(MsgKvDriver):
 
     async def open(self) -> None:
         await super().open()
-        self._watcher = await self.kv.watch(self.key,
-                                            include_history=self.include_history,
-                                            ignore_deletes=self.ignore_deletes)
+        with nats_errors_translated(f"Watching KV {self.bucket}/{self.key} failed"):
+            self._watcher = await self.kv.watch(self.key,
+                                                include_history=self.include_history,
+                                                ignore_deletes=self.ignore_deletes)
 
     async def close(self) -> None:
         if self._watcher is not None:
@@ -54,7 +56,8 @@ class MsgKvReader(MsgKvDriver):
         if self._watcher is None:
             raise MessengerReaderStopped(f"KV reader {self} is not open")
         while True:
-            entry = await self._watcher.__anext__()  # raises StopAsyncIteration when watcher is stopped
+            with nats_errors_translated(f"Watching KV {self.bucket}/{self.key} failed"):
+                entry = await self._watcher.__anext__()  # raises StopAsyncIteration when watcher is stopped
             if entry is None:
                 # nats-py sends a None marker once the initial replay is done, it is not a value
                 continue

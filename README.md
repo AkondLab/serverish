@@ -28,6 +28,10 @@ this will install `nats-py` package.
 - Custom JetStream API replacing nats-py private internals access
 
 ## Changes
+* 2.3 **Breaking:** exceptions of the NATS client library (`nats.errors.*`) no longer leak from the
+  Messenger API - every error is a `ServerishError` (see [Error handling](doc/concepts.md#error-handling)).
+  Replace `except nats.errors...` handlers around serverish calls. `raise_on_publish_error=False`
+  covers a missing connection too.
 * 1.7 Subscription reliability: reader auto-recovers from NATS disconnects and consumer expiry,
   RPC responder auto-resubscribes, `health_status` property on all drivers (reader, publisher,
   RPC responder, connection) with reconnect counts, error tracking, slow consumer detection.
