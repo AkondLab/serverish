@@ -233,12 +233,23 @@ class RetryPolicy:
                                  (defaults.attempts, defaults.delay, defaults.backoff,
                                   defaults.max_delay, defaults.total_timeout))))
 
-    def delay_for(self, attempt: int) -> float:
-        """Delay before retry number `attempt` (0-based), on a fully resolved policy."""
-        delay = (self.delay or 0.0) * (self.backoff or 1.0) ** attempt
-        max_delay = self.max_delay
-        if max_delay is not None and max_delay != UNLIMITED:
-            delay = min(delay, max_delay)
+    def delay_for(self, attempt: int, elapsed: float = 0.0) -> float:
+        """Delay before retry number `attempt` (0-based), on a fully resolved policy.
+
+        The delay never reaches past `total_timeout`: with `elapsed` seconds of
+        the budget already used, it is cut to what is left, so the last retry
+        happens at the deadline instead of after it.
+        """
+        delay = self.delay or 0.0
+        if delay:
+            try:
+                delay *= (self.backoff or 1.0) ** attempt
+            except OverflowError:  # the growing delay left the float range long ago
+                delay = math.inf
+        if self.max_delay is not None:
+            delay = min(delay, self.max_delay)
+        if self.total_timeout is not None:
+            delay = min(delay, max(self.total_timeout - elapsed, 0.0))
         return delay
 
     def keeps_retrying(self, attempt: int, elapsed: float) -> bool:

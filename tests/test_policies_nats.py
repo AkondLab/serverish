@@ -136,3 +136,52 @@ async def test_single_helpers_do_not_emit_deprecation(messenger, unique_subject)
         await single_publish(unique_subject, data={'v': 7})
         data, meta = await single_read(unique_subject)
     assert data == {'v': 7}
+
+
+@pytest.mark.nats
+async def test_reader_retry_budget_counts_retries_not_loop_passes(messenger, unique_subject):
+    """RetryPolicy(attempts=1) allows exactly one retry, whatever the reader did before the failure.
+
+    The reader is deliberately not opened here: read_next() opens it, and that
+    successful loop pass must not use up the retry budget.
+    """
+    reader = get_reader(unique_subject, deliver_policy='new',
+                        error_policy=ErrorPolicy(on_error=OnError.WAIT,
+                                                 retry=RetryPolicy(attempts=1, delay=0.05)))
+    calls = []
+
+    async def failing(*args, **kwargs):
+        calls.append(1)
+        raise RuntimeError('fetch failed')
+
+    reader.fetch_available = failing
+    try:
+        with pytest.raises(RuntimeError, match='fetch failed'):
+            await reader.read_next()
+    finally:
+        del reader.fetch_available
+        await reader.close()
+    assert len(calls) == 2  # the first failure and its single retry
+
+
+@pytest.mark.nats
+async def test_reader_pending_count_follows_live_messages(messenger, unique_subject):
+    """A message arriving while the reader waits refreshes the server pending count."""
+    pub = get_publisher(unique_subject)
+    await pub.open()
+    reader = get_reader(unique_subject, deliver_policy='new')
+    await reader.open()
+    try:
+        waiting = asyncio.create_task(reader.read_next())
+        await asyncio.sleep(1.0)        # the reader is now waiting for live data
+        reader._server_pending = 7      # a stale count left by an earlier pull
+        reader._emptied.clear()
+        await pub.publish(data={'v': 1})
+        data, meta = await asyncio.wait_for(waiting, timeout=10)
+        assert data == {'v': 1}
+        assert reader._server_pending == 0
+        assert reader._emptied.is_set()
+    finally:
+        await reader.close()
+        await pub.close()
+

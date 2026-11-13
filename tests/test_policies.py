@@ -7,7 +7,9 @@ import pytest
 from serverish.messenger import (UNLIMITED, BatchPolicy, DeliverAll, DeliverFromSeq,
                                  DeliverFromTime, DeliverLast, DeliverLastPerSubject,
                                  DeliverNew, DeliveryPolicy, ErrorPolicy, OnError,
-                                 OnMissed, PolicyConflict, RetryPolicy, Until)
+                                 OnMissed, PolicyConflict, RetryPolicy, Until, get_publisher)
+from serverish.messenger.msg_publisher import MsgPublisher
+from serverish.messenger.msg_reader import MsgReader
 
 UTC = datetime.timezone.utc
 
@@ -100,6 +102,34 @@ def test_retry_resolved_fills_only_none():
 def test_retry_delay_for_backoff_and_cap():
     r = RetryPolicy(attempts=UNLIMITED, delay=1.0, backoff=2.0, max_delay=5.0, total_timeout=UNLIMITED)
     assert [r.delay_for(n) for n in range(4)] == [1.0, 2.0, 4.0, 5.0]
+
+
+def test_retry_delay_survives_any_number_of_attempts():
+    """An outage of days must not end in OverflowError: the cap applies however far the backoff grew."""
+    assert MsgReader.retry_defaults.delay_for(10 ** 6) == 15.0
+    uncapped = RetryPolicy(attempts=UNLIMITED, delay=0.2, backoff=1.5, max_delay=UNLIMITED,
+                           total_timeout=UNLIMITED)
+    assert uncapped.delay_for(10 ** 6) == UNLIMITED
+
+
+def test_retry_zero_delay_stays_zero():
+    r = RetryPolicy(attempts=UNLIMITED, delay=0.0, backoff=2.0, max_delay=UNLIMITED, total_timeout=UNLIMITED)
+    assert r.delay_for(0) == 0.0
+    assert r.delay_for(10 ** 6) == 0.0
+
+
+def test_retry_delay_stays_within_total_timeout():
+    r = RetryPolicy(attempts=UNLIMITED, delay=10.0, backoff=1.0, max_delay=10.0, total_timeout=1.0)
+    assert r.delay_for(0, elapsed=0.4) == pytest.approx(0.6)
+    assert r.delay_for(0, elapsed=5.0) == 0.0
+
+
+def test_publisher_retry_delay_is_not_capped_to_zero():
+    """The guide's example: setting only `delay` must pace the ack retries."""
+    pub = get_publisher('test.policies.retry_delay',
+                        error_policy=ErrorPolicy(retry=RetryPolicy(attempts=5, delay=0.1)))
+    assert pub._ack_retry.delay_for(0) == 0.1
+    assert MsgPublisher.retry_defaults.delay_for(0) == 0.0  # no policy: immediate retries, as before
 
 
 def test_retry_keeps_retrying():

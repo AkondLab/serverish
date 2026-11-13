@@ -239,6 +239,7 @@ class MsgReader(MsgDriver):
             start_time: datetime = field(default_factory=datetime.now)
             error: Exception = None
             error_since: float = field(default_factory=time.monotonic)  # start of current error streak
+            retries: int = 0  # retries scheduled in the current error streak (not loop passes)
             last_consumer_check: float = field(default_factory=time.monotonic)
             consumer_check_interval: float = 10.0  # Check consumer health every 10 seconds
 
@@ -289,6 +290,9 @@ class MsgReader(MsgDriver):
                         self.reader._message_count += 1
                         self.reader._last_message_time = time.monotonic()
                         self.reader._consume_stamps.append(time.monotonic())  # feeds dynamic batch sizing
+                        pending = meta['nats'].get('num_pending')
+                        if pending is not None:  # the message just consumed knows best, however it was pulled
+                            self.reader._server_pending = pending
                         if len(self.reader.messages) == 0 and not self.reader._server_pending:
                             # "emptied" means the SERVER has nothing more for us
                             # (num_pending == 0 or unknown), not merely that the
@@ -475,6 +479,7 @@ class MsgReader(MsgDriver):
                 st.logput(f'{e.task}-err')
                 if st.error is None:
                     st.error_since = time.monotonic()  # new error streak begins
+                    st.retries = 0
                 st.error = e.error
                 self._last_error = e.error  # Track for health monitoring
                 # Fatal NATS API errors (4xx): the same request will never
@@ -504,7 +509,8 @@ class MsgReader(MsgDriver):
                         log.error(st.fmt(f"finishing iteration on error: {e.error}"))
                         raise MessengerReaderStopped
                     case 'WAIT':
-                        if not self._retry.keeps_retrying(st.n, time.monotonic() - st.error_since):
+                        elapsed = time.monotonic() - st.error_since
+                        if not self._retry.keeps_retrying(st.retries, elapsed):
                             log.error(st.fmt(f"retry budget exhausted "
                                              f"(attempts={self._retry.attempts}, "
                                              f"total_timeout={self._retry.total_timeout}s), "
@@ -513,7 +519,8 @@ class MsgReader(MsgDriver):
                             if error is e.error:
                                 raise e.error
                             raise error from e.error
-                        wait_time = self._retry.delay_for(st.n)
+                        wait_time = self._retry.delay_for(st.retries, elapsed)
+                        st.retries += 1
                         burst_log.warning("Reading failed, retrying",
                                           st.fmt(f"read_next error, (retry in {wait_time:.1f}s): {e.error}"))
                         await asyncio.sleep(wait_time)

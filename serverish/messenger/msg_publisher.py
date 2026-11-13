@@ -64,7 +64,7 @@ class MsgPublisher(MsgDriver):
     #: Effective ack-retry pacing (docs/design/POLICIES.md §1.4: driver defaults
     #: live at the driver). Overridable via error_policy=ErrorPolicy(retry=...).
     retry_defaults = RetryPolicy(attempts=2, delay=0.0, backoff=1.0,
-                                 max_delay=0.0, total_timeout=UNLIMITED)
+                                 max_delay=UNLIMITED, total_timeout=UNLIMITED)
 
     def __init__(self, error_policy: ErrorPolicy | None = None, **kwargs) -> None:
         # --- policy normalization (docs/design/POLICIES.md) ---
@@ -224,8 +224,9 @@ class MsgPublisher(MsgDriver):
                 await js.publish(self.subject, bdata, headers=headers, **kwargs)
                 return
             except nats.errors.TimeoutError as e:
-                if retry.keeps_retrying(attempt, time.monotonic() - start):
-                    delay = retry.delay_for(attempt)
+                elapsed = time.monotonic() - start
+                if retry.keeps_retrying(attempt, elapsed):
+                    delay = retry.delay_for(attempt, elapsed)
                     log.warning(f"No JetStream ack for message {msg_id} on '{self.subject}' "
                                 f"(attempt {attempt + 1}), retrying"
                                 + (f" in {delay:.1f}s" if delay else "")
