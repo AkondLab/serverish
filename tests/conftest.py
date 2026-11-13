@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from testcontainers.nats import NatsContainer
+from testcontainers.community.nats import NatsContainer
 
 from serverish.messenger import Messenger
 

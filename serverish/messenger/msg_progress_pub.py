@@ -350,7 +350,7 @@ class MsgProgressPublisher(MsgPublisher):
         return status
 
 
-def get_progresspublisher(subject) -> MsgProgressPublisher:
+def get_progresspublisher(subject, **kwargs) -> MsgProgressPublisher:
     """Returns a progress tracking publisher for a given subject
 
     Args:
@@ -360,5 +360,5 @@ def get_progresspublisher(subject) -> MsgProgressPublisher:
         MsgProgressPublisher: a publisher for the given subject
 
     """
-    return Messenger.get_progresspublisher(subject)
+    return Messenger.get_progresspublisher(subject, **kwargs)
 

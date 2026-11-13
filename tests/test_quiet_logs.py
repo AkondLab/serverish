@@ -27,8 +27,9 @@ class Records(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         self.records.append(record)
 
-    def of_level(self, level: int) -> list[str]:
-        return [r.getMessage() for r in self.records if r.levelno == level]
+    def of_level(self, level: int, logger: str = 'test_burst') -> list[str]:
+        """Messages of one logger: other tests' drivers may still be logging in the background"""
+        return [r.getMessage() for r in self.records if r.levelno == level and r.name == logger]
 
 
 @pytest.fixture

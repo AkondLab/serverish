@@ -24,6 +24,8 @@ from serverish.base.fifoset import FifoSet
 from serverish.connection.nats_errors import nats_errors_translated, translate_nats_error
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver, subject_family
+from serverish.messenger.policies import (UNLIMITED, BatchPolicy, DeliveryPolicy, ErrorPolicy,
+                                          OnError, RetryPolicy)
 
 log = logging.getLogger(__name__.rsplit('.')[-1])
 # Connection trouble is noticed by all readers of the application at the same moment:
@@ -51,6 +53,9 @@ class MsgReader(MsgDriver):
             tells the actual subject of each message
         error_behavior (str): on serious error (e.g. disconnection), one of 'RAISE', 'FINISH', 'WAIT'
         on_missed_messages (str): on missed messages (e.g. during broken connection), one of 'SKIP', 'REPLAY'
+        error_policy (ErrorPolicy): typed alternative to error_behavior/on_missed_messages, adds RetryPolicy
+            control over WAIT-mode reconnect pacing; conflicts with the flat kwargs (docs/design/POLICIES.md)
+        batch_policy (BatchPolicy): pull-size control - static bound or dynamic (consumption-rate based) sizing
 
     """
 
@@ -84,10 +89,26 @@ class MsgReader(MsgDriver):
                            doc="Read the subject family: the subject and all subjects extending it with "
                                "further tokens")
 
+    #: Effective WAIT-mode reconnect pacing (docs/design/POLICIES.md §1.4:
+    #: driver defaults live at the driver). Overridable per reader via
+    #: error_policy=ErrorPolicy(retry=RetryPolicy(...)).
+    retry_defaults = RetryPolicy(attempts=UNLIMITED, delay=0.2, backoff=1.5,
+                                 max_delay=15.0, total_timeout=UNLIMITED)
+    #: Effective batching defaults: dynamic sizing driven by the measured
+    #: consumption rate. Starts tiny (2), keeps a prefetched message at most
+    #: ~5 s in client memory, never requests more than 10k. Callers pin
+    #: static behaviour explicitly with BatchPolicy(dynamic=False, ...).
+    batch_defaults = BatchPolicy(dynamic=True, initial_batch=2,
+                                 max_time_in_memory=5.0, max_batch=10_000)
+    #: Pull size for static mode when the policy does not name one.
+    static_batch_default = 100
+
     def __init__(self, subject, parent = None,
-                 deliver_policy = 'all',
+                 deliver_policy: str | DeliveryPolicy = 'all',
                  opt_start_time = None,
                  consumer_cfg=None,
+                 error_policy: ErrorPolicy | None = None,
+                 batch_policy: BatchPolicy | None = None,
                  **kwargs) -> None:
         if parent is None:
             parent = Messenger()
@@ -98,8 +119,48 @@ class MsgReader(MsgDriver):
         }
         if consumer_cfg is not None:
             consumer_cfg_defaults.update(consumer_cfg)
-        # pull request size == read-ahead buffer bound; becomes BatchPolicy (docs/design/POLICIES.md)
-        self.batch = 100
+
+        # --- policy normalization (docs/design/POLICIES.md) ---
+        # `deliver_policy` is dual-typed: a string ('last', ...) is permanent
+        # sugar, a DeliveryPolicy object is the full form. Satellites
+        # (opt_start_time, opt_start_seq, nowait) combine only with the string.
+        self.delivery: DeliveryPolicy = DeliveryPolicy.from_value(
+            deliver_policy,
+            opt_start_time=opt_start_time,
+            opt_start_seq=consumer_cfg_defaults.get('opt_start_seq'),
+            nowait=kwargs.get('nowait'))
+        delivery_params = self.delivery.to_reader_params()
+        deliver_policy = delivery_params['deliver_policy']
+        opt_start_time = delivery_params.get('opt_start_time', opt_start_time)
+        if 'opt_start_seq' in delivery_params:
+            consumer_cfg_defaults['opt_start_seq'] = delivery_params['opt_start_seq']
+        if 'nowait' in delivery_params:
+            kwargs['nowait'] = delivery_params['nowait']
+
+        self.errors: ErrorPolicy | None = ErrorPolicy.from_kwargs(
+            error_policy,
+            error_behavior=kwargs.get('error_behavior'),
+            on_missed_messages=kwargs.get('on_missed_messages'))
+        if self.errors is not None:
+            if self.errors.on_error is not None:
+                if self.errors.on_error is OnError.LOG:
+                    raise ValueError("Readers do not support OnError.LOG - use RAISE, FINISH or WAIT")
+                kwargs['error_behavior'] = self.errors.on_error.value
+            if self.errors.on_missed is not None:
+                kwargs['on_missed_messages'] = self.errors.on_missed.value
+        self._retry: RetryPolicy = ((self.errors.retry if self.errors and self.errors.retry
+                                     else RetryPolicy()).resolved(self.retry_defaults))
+
+        if batch_policy is not None and not isinstance(batch_policy, BatchPolicy):
+            raise ValueError(f"batch_policy must be a BatchPolicy, got {type(batch_policy).__name__}")
+        self.batching: BatchPolicy = batch_policy or BatchPolicy()
+        # legacy attribute: static-mode pull size / read-ahead bound
+        self.batch = self.batching.max_batch or self.static_batch_default
+        self._consume_stamps: deque[float] = deque(maxlen=32)  # recent consumption timestamps
+        self._server_pending: int | None = None  # last num_pending reported by the server
+        self._last_batch: int | None = None      # previous dynamic pull size (growth damping)
+        # --- end policy normalization ---
+
         self.messages = deque()
         self.pull_subscription: JetStreamContext.PullSubscription | None = None
         self.push_subscription: JetStreamContext.PushSubscription | None = None
@@ -120,17 +181,9 @@ class MsgReader(MsgDriver):
         super().__init__(subject=subject, parent=parent,
                          deliver_policy=deliver_policy, opt_start_time=opt_start_time, consumer_cfg=consumer_cfg_defaults,
                          **kwargs)
-        # Validate deliver_policy ↔ start-marker consistency up front so
-        # callers get a clear error at construction time rather than an
-        # opaque NATS 400 error buried inside the read loop.
-        if self.deliver_policy == 'by_start_time' and self.opt_start_time is None:
-            raise ValueError(
-                "deliver_policy='by_start_time' requires opt_start_time to be set"
-            )
-        if self.deliver_policy == 'by_start_sequence' and self.consumer_cfg.get('opt_start_seq') is None:
-            raise ValueError(
-                "deliver_policy='by_start_sequence' requires opt_start_seq to be set in consumer_cfg"
-            )
+        # deliver_policy ↔ start-marker consistency is validated up front by
+        # DeliveryPolicy.from_value above, so callers get a clear error at
+        # construction time rather than an opaque NATS 400 in the read loop.
         log.debug(f"Created {self}")
 
 
@@ -185,6 +238,8 @@ class MsgReader(MsgDriver):
             log: List[str] = field(default_factory=list)
             start_time: datetime = field(default_factory=datetime.now)
             error: Exception = None
+            error_since: float = field(default_factory=time.monotonic)  # start of current error streak
+            retries: int = 0  # retries scheduled in the current error streak (not loop passes)
             last_consumer_check: float = field(default_factory=time.monotonic)
             consumer_check_interval: float = 10.0  # Check consumer health every 10 seconds
 
@@ -234,7 +289,16 @@ class MsgReader(MsgDriver):
                         # Update health monitoring stats
                         self.reader._message_count += 1
                         self.reader._last_message_time = time.monotonic()
-                        if len(self.reader.messages) == 0:
+                        self.reader._consume_stamps.append(time.monotonic())  # feeds dynamic batch sizing
+                        pending = meta['nats'].get('num_pending')
+                        if pending is not None:  # the message just consumed knows best, however it was pulled
+                            self.reader._server_pending = pending
+                        if len(self.reader.messages) == 0 and not self.reader._server_pending:
+                            # "emptied" means the SERVER has nothing more for us
+                            # (num_pending == 0 or unknown), not merely that the
+                            # local read-ahead drained - a pull smaller than the
+                            # backlog (dynamic batching, backlog > static batch)
+                            # must not signal wait_for_empty() prematurely.
                             self.reader._emptied.set()
                     except Exception as e:
                         # Error in logging, can be ignored
@@ -315,8 +379,9 @@ class MsgReader(MsgDriver):
                     # For fetch_available, timeout is network latency budget (not message wait time)
                     # Server responds immediately with no_wait=True, we just account for slow networks
                     fetch_timeout = 2.0  # Reduced - should be quick with no_wait
-                    log.debug(self.fmt(f"Pulling {self.reader.batch} messages with timeout {fetch_timeout}s"))
-                    new_msgs = await self.reader.fetch_available(batch=self.reader.batch, timeout=fetch_timeout)
+                    batch = self.reader._next_batch_size()
+                    log.debug(self.fmt(f"Pulling {batch} messages with timeout {fetch_timeout}s"))
+                    new_msgs = await self.reader.fetch_available(batch=batch, timeout=fetch_timeout)
                     log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
 
                     # If no messages were available (got 404 from server or timeout), decide what to do
@@ -412,6 +477,9 @@ class MsgReader(MsgDriver):
                 raise MessengerReaderStopped
             except st.ErrorException as e:  # some error
                 st.logput(f'{e.task}-err')
+                if st.error is None:
+                    st.error_since = time.monotonic()  # new error streak begins
+                    st.retries = 0
                 st.error = e.error
                 self._last_error = e.error  # Track for health monitoring
                 # Fatal NATS API errors (4xx): the same request will never
@@ -441,7 +509,18 @@ class MsgReader(MsgDriver):
                         log.error(st.fmt(f"finishing iteration on error: {e.error}"))
                         raise MessengerReaderStopped
                     case 'WAIT':
-                        wait_time = min(0.2 + st.n/5.0, 15.0)
+                        elapsed = time.monotonic() - st.error_since
+                        if not self._retry.keeps_retrying(st.retries, elapsed):
+                            log.error(st.fmt(f"retry budget exhausted "
+                                             f"(attempts={self._retry.attempts}, "
+                                             f"total_timeout={self._retry.total_timeout}s), "
+                                             f"raising: {e.error}"))
+                            error = translate_nats_error(e.error, f"Reading from '{self.subject}' failed")
+                            if error is e.error:
+                                raise e.error
+                            raise error from e.error
+                        wait_time = self._retry.delay_for(st.retries, elapsed)
+                        st.retries += 1
                         burst_log.warning("Reading failed, retrying",
                                           st.fmt(f"read_next error, (retry in {wait_time:.1f}s): {e.error}"))
                         await asyncio.sleep(wait_time)
@@ -566,6 +645,8 @@ class MsgReader(MsgDriver):
             needed -= 1
 
             num_pending = self._num_pending(msg)
+            if num_pending is not None:
+                self._server_pending = num_pending  # feeds dynamic batch sizing
             if num_pending == 0:
                 # Server-confirmed end of data - no reason to wait for the
                 # closing status (which may trail by a network round trip,
@@ -582,6 +663,48 @@ class MsgReader(MsgDriver):
             # closing status arrives or the backstop hits (degraded mode)
 
         return msgs
+
+    def _next_batch_size(self) -> int:
+        """Pull size for the next request.
+
+        Static mode: the configured constant. Dynamic mode (the default):
+        sized so that a prefetched message waits at most `max_time_in_memory`
+        seconds at the measured consumption rate, damped to at most 8x the
+        previous pull (a two-sample rate estimate can be wildly optimistic -
+        the damping turns a potential memory spike into a geometric ramp-up),
+        clamped to `max_batch` and capped by the server-stamped num_pending
+        (+1 to keep probing for new data).
+        """
+        dynamic = (self.batching.dynamic if self.batching.dynamic is not None
+                   else self.batch_defaults.dynamic)
+        if not dynamic:
+            # the policy wins; otherwise honor the legacy mutable `reader.batch`
+            # attribute (initialized to the static default)
+            return self.batching.max_batch or self.batch
+        max_batch = self.batching.max_batch or self.batch_defaults.max_batch
+        rate = self._consumption_rate()
+        if rate is None:
+            batch = self.batching.initial_batch or self.batch_defaults.initial_batch
+        else:
+            target = self.batching.max_time_in_memory or self.batch_defaults.max_time_in_memory
+            batch = int(rate * target)
+            if self._last_batch is not None:
+                batch = min(batch, self._last_batch * 8)
+        if self._server_pending is not None:
+            batch = min(batch, self._server_pending + 1)
+        batch = max(1, min(batch, max_batch))
+        self._last_batch = batch
+        return batch
+
+    def _consumption_rate(self) -> float | None:
+        """Messages/s the consumer actually takes, None until enough data"""
+        stamps = self._consume_stamps
+        if len(stamps) < 2:
+            return None
+        span = stamps[-1] - stamps[0]
+        if span <= 0:
+            return None
+        return (len(stamps) - 1) / span
 
     @staticmethod
     def _num_pending(msg: Msg) -> int | None:
@@ -982,7 +1105,7 @@ class MsgReader(MsgDriver):
 
 
 def get_reader(subject: str,
-                   deliver_policy='all',
+                   deliver_policy: str | DeliveryPolicy = 'all',
                    opt_start_time=None,
                    **kwargs) -> 'MsgReader':
     """Returns a subscription for a given subject, manages single subscription

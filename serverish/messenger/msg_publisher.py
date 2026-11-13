@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import time
+import warnings
 
 import jsonschema
 import nats.errors
@@ -11,6 +13,7 @@ from serverish.base import MessengerNotConnected, MessengerNotPersisted, Messeng
 from serverish.connection.nats_errors import translate_nats_error
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver, log
+from serverish.messenger.policies import UNLIMITED, ErrorPolicy, OnError, RetryPolicy
 
 
 class MsgPublisher(MsgDriver):
@@ -58,12 +61,33 @@ class MsgPublisher(MsgDriver):
                                         doc="Retries when JetStream ack does not arrive in time; "
                                             "safe thanks to Nats-Msg-Id deduplication")
 
-    def __init__(self, **kwargs) -> None:
+    #: Effective ack-retry pacing (docs/design/POLICIES.md §1.4: driver defaults
+    #: live at the driver). Overridable via error_policy=ErrorPolicy(retry=...).
+    retry_defaults = RetryPolicy(attempts=2, delay=0.0, backoff=1.0,
+                                 max_delay=UNLIMITED, total_timeout=UNLIMITED)
+
+    def __init__(self, error_policy: ErrorPolicy | None = None, **kwargs) -> None:
+        # --- policy normalization (docs/design/POLICIES.md) ---
+        self.errors: ErrorPolicy | None = ErrorPolicy.from_kwargs(
+            error_policy,
+            raise_on_publish_error=kwargs.get('raise_on_publish_error'),
+            ack_timeout_retries=kwargs.get('ack_timeout_retries'))
+        if self.errors is not None and self.errors.on_error is not None:
+            if self.errors.on_error not in (OnError.RAISE, OnError.LOG):
+                raise ValueError("Publishers support OnError.RAISE or OnError.LOG only")
+            kwargs['raise_on_publish_error'] = self.errors.on_error is OnError.RAISE
+        if (self.errors is not None and self.errors.retry is not None
+                and self.errors.retry.attempts is not None
+                and self.errors.retry.attempts != UNLIMITED):  # equality, not identity: float('inf') is a distinct object
+            kwargs['ack_timeout_retries'] = int(self.errors.retry.attempts)
+        # --- end policy normalization ---
         # Health monitoring fields
         self._publish_count: int = 0
         self._error_count: int = 0
         self._last_publish_time: float | None = None
         self._last_error: Exception | None = None
+        self._warned_unopened: bool = False
+        self._was_opened: bool = False
         self._warned_not_persistent: bool = False
         super().__init__(**kwargs)
 
@@ -77,7 +101,17 @@ class MsgPublisher(MsgDriver):
         """
         if self.persistent and not await self.messenger.is_persistent(self.subject):
             raise MessengerNotPersisted(self.subject)
+        self._was_opened = True
         await super().open()
+
+    @property
+    def _ack_retry(self) -> RetryPolicy:
+        """Resolved ack-retry pacing: error_policy.retry wins; otherwise the
+        legacy `ack_timeout_retries` param (kept live - it may be set after
+        construction) fills the attempts slot of the driver defaults."""
+        if self.errors is not None and self.errors.retry is not None:
+            return self.errors.retry.resolved(self.retry_defaults)
+        return RetryPolicy(attempts=self.ack_timeout_retries).resolved(self.retry_defaults)
 
     async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
         """Publishes a messages to publisher subject
@@ -99,6 +133,15 @@ class MsgPublisher(MsgDriver):
             the error is logged and the message is returned with the `error` tag and `status`
             set to the error message.
         """
+        if not self.is_open and not self._warned_unopened:
+            self._warned_unopened = True
+            state = "closed" if self._was_opened else "never-opened"
+            warnings.warn(
+                f"Publishing on a {state} publisher ({self}). Open it explicitly "
+                f"(await pub.open() or 'async with pub:') - publishing on a publisher "
+                f"that is not open will become an error in serverish 3.0; "
+                f"for one-shot use single_publish()",
+                DeprecationWarning, stacklevel=2)
         msg = self.messenger.create_msg(data, meta)
         bdata = self.messenger.encode(msg)
         try:
@@ -163,7 +206,9 @@ class MsgPublisher(MsgDriver):
         A missing ack does not mean the message was not delivered - it may
         well be stored while the ack was processed too late (e.g. starved
         client event loop). Retries are deduplicated server-side via the
-        Nats-Msg-Id header, so this never produces duplicates.
+        Nats-Msg-Id header for as long as the stream's duplicate window lasts
+        (2 minutes unless the stream says otherwise): a retry sequence which
+        fits in the window never produces duplicates, a retry sent later can.
 
         Raises:
             MessengerNotConnected: JetStream is not connected
@@ -173,19 +218,28 @@ class MsgPublisher(MsgDriver):
         if js is None:
             raise MessengerNotConnected(f"Trying to publish to subject '{self.subject}' failed. "
                                         f"JetStream not connected")
-        for attempt in range(self.ack_timeout_retries + 1):
+        retry = self._ack_retry
+        start = time.monotonic()
+        attempt = 0
+        while True:
             try:
                 await js.publish(self.subject, bdata, headers=headers, **kwargs)
                 return
             except nats.errors.TimeoutError as e:
-                if attempt < self.ack_timeout_retries:
+                elapsed = time.monotonic() - start
+                if retry.keeps_retrying(attempt, elapsed):
+                    delay = retry.delay_for(attempt, elapsed)
                     log.warning(f"No JetStream ack for message {msg_id} on '{self.subject}' "
-                                f"(attempt {attempt + 1}/{self.ack_timeout_retries + 1}), retrying - "
-                                f"deduplicated by Nats-Msg-Id")
+                                f"(attempt {attempt + 1}), retrying"
+                                + (f" in {delay:.1f}s" if delay else "")
+                                + " - deduplicated by Nats-Msg-Id")
+                    if delay:
+                        await asyncio.sleep(delay)
+                    attempt += 1
                     continue
                 raise MessengerPublishAckTimeout(
                     f"No JetStream ack for message {msg_id} on '{self.subject}' "
-                    f"after {self.ack_timeout_retries + 1} attempts. The message MAY have been "
+                    f"after {attempt + 1} attempts. The message MAY have been "
                     f"delivered - a missing ack often means a starved client event loop, "
                     f"not a delivery failure") from e
 
@@ -218,16 +272,18 @@ class MsgPublisher(MsgDriver):
         }
 
 
-def get_publisher(subject, persistent: bool = False) -> MsgPublisher:
+def get_publisher(subject, persistent: bool = False, **kwargs) -> MsgPublisher:
     """Returns a publisher for a given subject
 
     Args:
         subject (str): subject to publish to
         persistent (bool): require the subject to be persistent - `open()` and `publish()` raise
             `MessengerNotPersisted` if published messages would not be stored (default in serverish 3.0)
+        kwargs: additional MsgPublisher arguments, e.g. error_policy (ErrorPolicy),
+            raise_on_publish_error, ack_timeout_retries
 
     Returns:
         Publisher: a publisher for the given subject
 
     """
-    return Messenger.get_publisher(subject, persistent=persistent)
+    return Messenger.get_publisher(subject, persistent=persistent, **kwargs)
