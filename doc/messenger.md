@@ -64,9 +64,16 @@ await single_publish('svc.status.my-service', data={'state': 'done'})
 ### Errors and retries
 
 By default a failed publish raises. Missing JetStream acks are retried
-transparently (safe: every publish carries a globally unique `Nats-Msg-Id`,
-so the server deduplicates); when retries are exhausted you get
+transparently: every publish carries a globally unique `Nats-Msg-Id`, so the
+server drops a repeated copy. When retries are exhausted you get
 `MessengerPublishAckTimeout` — note the message *may* have been delivered.
+
+The server remembers message ids only for the stream's duplicate window
+(2 minutes unless the stream is configured otherwise). The default retries
+are immediate and stay far inside it. If you set a `RetryPolicy` whose
+delays add up to more than the window, a late retry of a message that was
+in fact stored is stored again — keep `total_timeout` below the window when
+duplicates matter.
 
 ```python
 from serverish.messenger import ErrorPolicy, OnError, RetryPolicy, get_publisher
@@ -256,7 +263,8 @@ from serverish.base import ServerishError, MessengerReaderStopped, MessengerPubl
 try:
     await pub.publish(data=payload)
 except MessengerPublishAckTimeout:
-    ...   # no ack - message MAY have been delivered (dedup makes re-publish safe)
+    ...   # no ack - the message MAY have been stored. Calling publish() again sends a
+          # new message (new id), so the data may then be stored twice
 except ServerishError:
     ...   # anything else from serverish
 ```

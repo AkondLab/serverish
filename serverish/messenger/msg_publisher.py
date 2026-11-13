@@ -206,7 +206,9 @@ class MsgPublisher(MsgDriver):
         A missing ack does not mean the message was not delivered - it may
         well be stored while the ack was processed too late (e.g. starved
         client event loop). Retries are deduplicated server-side via the
-        Nats-Msg-Id header, so this never produces duplicates.
+        Nats-Msg-Id header for as long as the stream's duplicate window lasts
+        (2 minutes unless the stream says otherwise): a retry sequence which
+        fits in the window never produces duplicates, a retry sent later can.
 
         Raises:
             MessengerNotConnected: JetStream is not connected
