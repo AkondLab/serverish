@@ -312,14 +312,16 @@ class BatchPolicy:
 
     `max_batch` means the same thing in both modes (static: the pull size;
     dynamic: its upper bound), so callers expressing only the bound stay
-    neutral on mode and benefit when the driver default flips to dynamic.
+    neutral on mode.
 
     Dynamic mode (`dynamic=True`): pull size follows the consumer's measured
     consumption rate so a prefetched message waits at most
     `max_time_in_memory` seconds client-side, clamped to `max_batch` and
     capped by the server-stamped num_pending.
 
-    None = driver default (today: static, max_batch=100).
+    None = driver default (`MsgReader.batch_defaults`: dynamic, first pull 2,
+    5 s residency, at most 10 000 per pull). `BatchPolicy(dynamic=False,
+    max_batch=100)` pins the static behaviour of versions before 2.4.
     """
     max_batch: int | None = None
     dynamic: bool | None = None

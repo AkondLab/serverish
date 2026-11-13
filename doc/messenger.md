@@ -195,7 +195,7 @@ from serverish.messenger import BatchPolicy, get_reader
 # constrained device: keep at most 50 messages in memory, ~1 s residency
 reader = get_reader(subject, batch_policy=BatchPolicy(max_batch=50, max_time_in_memory=1.0))
 
-# pin the pre-2.3 static behaviour
+# pin the static behaviour of versions before 2.4
 reader = get_reader(subject, batch_policy=BatchPolicy(dynamic=False, max_batch=100))
 ```
 
