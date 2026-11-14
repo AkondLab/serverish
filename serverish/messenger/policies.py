@@ -228,6 +228,8 @@ class RetryPolicy:
             v = getattr(self, name)
             if v is not None and v != UNLIMITED and v < 0:
                 raise ValueError(f"RetryPolicy.{name} must be non-negative")
+        if self.attempt_timeout == 0:
+            raise ValueError("RetryPolicy.attempt_timeout must be positive: no attempt succeeds in no time")
 
     def resolved(self, defaults: 'RetryPolicy') -> 'RetryPolicy':
         """Returns a copy with None fields filled from `defaults` (driver defaults)."""

@@ -281,6 +281,33 @@ async def test_session_is_replaced_on_a_stream_with_no_spare_consumer(messenger)
         await js.delete_stream(f'full_{token}')
 
 
+async def test_consumer_which_could_not_be_given_up_stays_with_the_reader(messenger):
+    """No spare consumer and the old one cannot be deleted: the reader keeps it, to try again - and to read on."""
+    token = uuid.uuid4().hex[:8]
+    js = messenger.connection.js
+    await js.add_stream(name=f'full_{token}', subjects=[f'full.{token}.>'], storage='memory', max_consumers=1)
+    original = js.delete_consumer
+    try:
+        async with Reading(f'full.{token}.x', error_policy=FAST) as r:
+            old = r.reader._session
+
+            async def times_out(*args, **kwargs):
+                raise nats.errors.TimeoutError
+
+            js.delete_consumer = times_out
+            with pytest.raises(Exception, match='Deleting the consumer'):
+                await r.reader._replace_session()
+            assert r.reader._session is old and not old.gone
+            await r.publish_and_expect(1)           # the session it kept is the one which works
+            js.delete_consumer = original
+            await r.reader._replace_session()
+            assert r.reader._session is not old
+            await r.publish_and_expect(2)
+    finally:
+        js.delete_consumer = original
+        await js.delete_stream(f'full_{token}')
+
+
 async def test_refused_pull_request_is_an_error_not_an_empty_subject(messenger, unique_subject):
     """A consumer limited to smaller requests than the reader makes: every pull is refused, and the reader says so."""
     reader = get_reader(unique_subject, deliver_policy='new', error_policy=ErrorPolicy(on_error=OnError.RAISE),

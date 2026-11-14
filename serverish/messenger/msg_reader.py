@@ -954,21 +954,31 @@ class MsgReader(MsgDriver):
         - a stream which takes no more consumers has no slot for a second one.
         """
         old = self._session
-        if old is not None and await self._has_fixed_name(old):
-            await self._delete_consumer(old)
-            old.gone = True  # should the creation fail: this session has nothing to read from
+        if old is not None and not old.gone and await self._has_fixed_name(old):
+            await self._give_up_consumer(old)
         try:
             new = await self._create_session(resume=True)
         except MessengerJetStreamError as e:
             if old is None or old.gone or not is_consumer_limit(e.__cause__):
                 raise
-            await self._discard_session(old)
-            old, self._session = None, None
+            await self._give_up_consumer(old)
             new = await self._create_session(resume=True)
         self._session = new
         self._reconnect_count += 1
         if old is not None:
             await self._discard_session(old, keep_consumer=old.gone)
+
+    async def _give_up_consumer(self, session: _ConsumerSession) -> None:
+        """Deletes the consumer of a session the reader still holds, to make room for the next one
+
+        The session stays the reader's, known to have nothing to read from: should the deletion
+        or the creation which follows fail, the next attempt starts from where this one stopped.
+
+        Raises:
+            MessengerTransportError: the consumer could not be deleted - it may still be there
+        """
+        await self._delete_consumer(session)
+        session.gone = True
 
     async def _has_fixed_name(self, session: _ConsumerSession) -> bool:
         """Tells whether the next session would get the very consumer of this one

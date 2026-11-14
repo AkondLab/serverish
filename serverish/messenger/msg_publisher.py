@@ -263,8 +263,9 @@ class MsgPublisher(MsgDriver):
                             f"(attempt {attempt + 1}), retrying"
                             + (f" in {delay:.1f}s" if delay else "")
                             + " - deduplicated by Nats-Msg-Id")
-                if delay:
-                    await asyncio.sleep(delay)
+                # also with no delay: an attempt which fails without waiting for anything must
+                # not keep the event loop (and a cancellation of this call) from running
+                await asyncio.sleep(delay)
                 attempt += 1
 
     @property

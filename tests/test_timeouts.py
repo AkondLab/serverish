@@ -92,6 +92,34 @@ async def test_publish_attempts_still_limit_the_retries(messenger, unique_subjec
         await pub.close()
 
 
+def test_attempt_which_gets_no_time_is_refused():
+    with pytest.raises(ValueError, match='attempt_timeout must be positive'):
+        RetryPolicy(attempt_timeout=0)
+
+
+@pytest.mark.nats
+async def test_publish_retried_without_a_pause_lets_the_loop_run(messenger, unique_subject):
+    """delay=0 and attempts which fail without waiting: other tasks still run, and the call can be cancelled."""
+    pub = get_publisher(unique_subject, error_policy=ErrorPolicy(retry=RetryPolicy(delay=0.0, total_timeout=30.0)))
+    await pub.open()
+    js = pub.connection.js
+    original = js.publish
+
+    async def fails_at_once(*args, **kwargs):
+        raise nats.errors.TimeoutError
+
+    js.publish = fails_at_once
+    try:
+        publishing = asyncio.create_task(pub.publish(data={'v': 1}))
+        await asyncio.sleep(0.2)                    # runs only if the retry loop lets go of the event loop
+        publishing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(publishing, timeout=2)
+    finally:
+        js.publish = original
+        await pub.close()
+
+
 @pytest.mark.nats
 async def test_publish_which_fails_at_once_does_not_spin(messenger, unique_subject):
     """Default pacing: instant failures are spaced out, not repeated thousands of times."""
