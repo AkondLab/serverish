@@ -242,7 +242,7 @@ async def test_reader_sequence_tracking(messenger, unique_subject):
             break
 
     # Force a reconnection with the reader
-    await sub._reopen()
+    await sub._replace_session()
 
     # Publish 3 more messages
     for i in range(3):

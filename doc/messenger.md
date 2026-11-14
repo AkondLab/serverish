@@ -105,6 +105,12 @@ default a reader retries for ever (`total_timeout=UNLIMITED`); with a finite
 `total_timeout` it raises when a failure lasts longer than that. The clock
 starts with a failure and stops when the server answers again.
 
+A reader recovers by itself from everything that can heal: a lost connection,
+a restarted server, an expired consumer, answers which stopped coming. Do not
+wrap it in retry loops or watchdogs. Only what cannot heal stops it, with
+`MessengerReaderConfigError`: no stream stores the subject, or the server
+refuses the reader's configuration.
+
 
 ### Journal (human-readable log over NATS)
 
