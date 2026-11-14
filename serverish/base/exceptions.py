@@ -62,7 +62,16 @@ class MessengerJetStreamError(MessengerTransportError):
         self.description = description
 
 
-class MessengerTransportTimeout(MessengerTransportError, TimeoutError):
+class MessengerTimeout(ServerishError, TimeoutError):
+    """Something did not happen in time - the common base of every serverish timeout
+
+    Catch it (or the builtin `TimeoutError`) to handle a missing publish
+    confirmation, an unanswered request and a slow server alike.
+    """
+    pass
+
+
+class MessengerTransportTimeout(MessengerTransportError, MessengerTimeout):
     """Raised when the NATS server did not answer in time"""
     pass
 
@@ -96,7 +105,7 @@ class MessengerRequestJetStreamSubject(MessengerRequestNoResponse):
 class MessengerRequestCanceled(MessengerRequestNoResponse):
     pass
 
-class MessengerRequestTimeout(MessengerRequestNoResponse, TimeoutError):
+class MessengerRequestTimeout(MessengerRequestNoResponse, MessengerTimeout):
     pass
 
 class MessengerRequestNoResultYet(MessengerRequestNoResponse):

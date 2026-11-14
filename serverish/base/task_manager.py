@@ -4,7 +4,6 @@ import logging
 import param
 
 from serverish.base import StatusReport
-from serverish.base.asyncio_util_functions import wait_for_psce
 from serverish.base.collector import Collector
 from serverish.base.hasstatuses import HasStatuses
 from serverish.base.idmanger import IdManager
@@ -92,7 +91,8 @@ class Task(HasStatuses):
             else:
                 t = self.task
             try:
-                await asyncio.wait_for(t, timeout=timeout)
+                async with asyncio.timeout(timeout):
+                    await t
             except asyncio.TimeoutError:
                 logger.debug(f'wait_for Task {self.name} timeout (task canceling:{cancel_on_timeout})')
                 raise
@@ -145,7 +145,8 @@ class TaskManager(Singleton):
 
         for task in tasks:
             try:
-                await wait_for_psce(task.task, timeout)
+                async with asyncio.timeout(timeout):
+                    await task.task
             except asyncio.TimeoutError:
                 logger.error(f'Timeout during all tasks cancellation.')
             except asyncio.CancelledError:

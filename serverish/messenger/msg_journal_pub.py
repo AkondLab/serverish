@@ -16,6 +16,7 @@ from serverish.base.idmanger import gen_uid
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver
 from serverish.messenger.msg_publisher import MsgPublisher
+from serverish.messenger.policies import UNLIMITED, RetryPolicy
 
 
 @dataclass
@@ -55,8 +56,16 @@ class MsgJournalPublisher(MsgPublisher):
     Use this class for text based, log-like messages to be displayed for a user.
     Interface mimics `logging` module, but note, that methods are async.
     Note, that raise_on_publish_error is set to False by default, which differs from the default in MsgPublisher.
+
+    A journal is best effort: an entry which the server does not confirm within
+    5 s is given up (logged, not raised), so that a program on an unstable
+    network is not held up by its own journal. Pass ``timeout=`` to a logging
+    call to wait shorter (or longer) for a single entry.
     """
     raise_on_publish_error = param.Boolean(default=False)  # override default
+    #: one attempt, 5 s: a journal entry is not worth holding the program up
+    retry_defaults = RetryPolicy(attempts=UNLIMITED, delay=0.1, backoff=1.0, max_delay=UNLIMITED,
+                                 total_timeout=5.0, attempt_timeout=5.0)
     conversations = param.Dict(default={}, doc="Conversations being tracked")
 
     _nameToLevel = None
@@ -90,7 +99,8 @@ class MsgJournalPublisher(MsgPublisher):
                   icon: str | None = None,
                   actions: list[str] | None = None,
                   timestamp: datetime | Sequence | None = None,
-                  meta: dict | None = None
+                  meta: dict | None = None,
+                  timeout: float | None = None
                   ) -> JournalEntry:
         """Log a message to the journal.
 
@@ -103,6 +113,8 @@ class MsgJournalPublisher(MsgPublisher):
             actions (list[str], optional): List of actions to display. Defaults to None.
             timestamp (datetime | Sequence | None, optional): Timestamp of the message. Defaults to None.
             meta (dict, optional): Additional metadata to publish. Defaults to None.
+            timeout (float, optional): how long to wait for the server to confirm the entry [s];
+                None = the journal's default (5 s)
         """
         if timestamp is None:
             timestamp = dt_utcnow_array()
@@ -116,7 +128,7 @@ class MsgJournalPublisher(MsgPublisher):
             icon=icon,
             actions=actions
         )
-        return await self.publish_journal_operation(entry, op='publish', meta=meta)
+        return await self.publish_journal_operation(entry, op='publish', meta=meta, timeout=timeout)
 
     async def debug(self, message: str, *args, **kwargs) -> JournalEntry:
         """Log a message with level DEBUG on the journal."""
@@ -142,20 +154,22 @@ class MsgJournalPublisher(MsgPublisher):
         """Log a message with level CRITICAL on the journal."""
         return await self.log(logging.CRITICAL, message, *args, **kwargs)
 
-    async def publish_journal_operation(self, entry: JournalEntry, op: str, meta=None) -> JournalEntry:
+    async def publish_journal_operation(self, entry: JournalEntry, op: str, meta=None,
+                                        timeout: float | None = None) -> JournalEntry:
         """Publish a journal operation
 
         Args:
             entry (JournalEntry): Journal entry to publish
             op (str): Operation to perform on the journal entry. One of 'publish', 'update', 'close'
             meta (dict, optional): Additional metadata to publish. Defaults to None.
+            timeout (float, optional): deadline for the publish [s]; None = the journal's default
         """
         if meta is None:
             meta = {}
         meta.update({'message_type': f'journal.{op}'})
         dentry = entry.to_dict()
         dentry['op'] = op
-        await self.publish(dentry, meta = meta)
+        await self.publish(dentry, meta=meta, timeout=timeout)
         return entry
 
 

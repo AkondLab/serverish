@@ -61,28 +61,50 @@ from serverish.messenger import single_publish
 await single_publish('svc.status.my-service', data={'state': 'done'})
 ```
 
-### Errors and retries
+### Errors, retries and deadlines
 
-By default a failed publish raises. Missing JetStream acks are retried
-transparently: every publish carries a globally unique `Nats-Msg-Id`, so the
-server drops a repeated copy. When retries are exhausted you get
-`MessengerPublishAckTimeout` — note the message *may* have been delivered.
+By default a failed publish raises. A publish waits for the server to confirm
+that the message is stored. When the confirmation does not come within
+`attempt_timeout` (5 s) the publisher asks again, and it gives up at its
+deadline, `total_timeout` (15 s), with `MessengerPublishAckTimeout` — note the
+message *may* have been delivered. `publish()` never takes longer than the deadline.
 
-The server remembers message ids only for the stream's duplicate window
-(2 minutes unless the stream is configured otherwise). The default retries
-are immediate and stay far inside it. If you set a `RetryPolicy` whose
-delays add up to more than the window, a late retry of a message that was
-in fact stored is stored again — keep `total_timeout` below the window when
-duplicates matter.
+Both times belong to the publisher's `RetryPolicy`:
 
 ```python
 from serverish.messenger import ErrorPolicy, OnError, RetryPolicy, get_publisher
 
-# non-critical telemetry: log errors instead of raising, retry acks harder
+# a command that must not hang: confirmed within 3 s or an error
+pub = get_publisher('svc.cmd.dome', error_policy=ErrorPolicy(retry=RetryPolicy(total_timeout=3.0)))
+
+# non-critical telemetry: log errors instead of raising, ask again every second for 10 s
 pub = get_publisher('telemetry.conditions.mysensor',
                     error_policy=ErrorPolicy(on_error=OnError.LOG,
-                                             retry=RetryPolicy(attempts=5, delay=0.1)))
+                                             retry=RetryPolicy(attempt_timeout=1.0, total_timeout=10.0)))
 ```
+
+`await pub.publish(data, timeout=3.0)` is a shortcut for a single call: it
+replaces `total_timeout` for that one publish. `RetryPolicy.attempts` can stop
+the retries before the deadline; by default as many are made as fit in it.
+
+Asking again is safe: every publish carries a globally unique `Nats-Msg-Id`,
+so the server drops a repeated copy. It remembers message ids only for the
+stream's duplicate window (2 minutes unless the stream is configured
+otherwise). The default deadline stays far inside it; if you set a
+`total_timeout` longer than the window, a late retry of a message that was
+in fact stored is stored again.
+
+A journal (`get_journalpublisher`) is best effort: its deadline is 5 s, the
+failure is logged, never raised, and `await journal.info('...', timeout=0.5)`
+waits even shorter for one entry.
+
+Every timeout of serverish is a `MessengerTimeout` (and a builtin `TimeoutError`).
+
+For readers the same `RetryPolicy` paces the recovery from failures: by
+default a reader retries for ever (`total_timeout=UNLIMITED`); with a finite
+`total_timeout` it raises when a failure lasts longer than that. The clock
+starts with a failure and stops when the server answers again.
+
 
 ### Journal (human-readable log over NATS)
 

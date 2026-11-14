@@ -129,7 +129,9 @@ def test_publisher_retry_delay_is_not_capped_to_zero():
     pub = get_publisher('test.policies.retry_delay',
                         error_policy=ErrorPolicy(retry=RetryPolicy(attempts=5, delay=0.1)))
     assert pub._ack_retry.delay_for(0) == 0.1
-    assert MsgPublisher.retry_defaults.delay_for(0) == 0.0  # no policy: immediate retries, as before
+    slow = get_publisher('test.policies.retry_delay',
+                         error_policy=ErrorPolicy(retry=RetryPolicy(attempts=5, delay=3.0)))
+    assert slow._ack_retry.delay_for(0) == 3.0
 
 
 def test_retry_keeps_retrying():
@@ -278,7 +280,10 @@ def test_driver_error_defaults():
     from serverish.messenger.msg_publisher import MsgPublisher
     assert get_publisher('test.policies.unit').raise_on_publish_error is True
     assert get_journalpublisher('test.policies.unit').raise_on_publish_error is False
-    assert MsgPublisher.retry_defaults.attempts == 2
+    assert MsgPublisher.retry_defaults.attempts == UNLIMITED     # as many as fit in the deadline...
+    assert MsgPublisher.retry_defaults.total_timeout == 15.0     # ...which is finite
+    assert MsgPublisher.retry_defaults.attempt_timeout == 5.0
+    assert get_journalpublisher('test.policies.unit')._ack_retry.total_timeout == 5.0  # best effort
     assert MsgReader.retry_defaults.attempts == UNLIMITED
     assert MsgReader.retry_defaults.max_delay == 15.0
 
@@ -321,7 +326,7 @@ def test_publisher_unlimited_attempts_by_value():
     pub = get_publisher('test.policies.unit',
                         error_policy=ErrorPolicy(retry=RetryPolicy(attempts=float('inf'))))
     assert pub._ack_retry.attempts == UNLIMITED
-    assert pub.ack_timeout_retries == 2  # legacy int param untouched by the unlimited policy
+    assert pub.ack_timeout_retries is None  # legacy int param untouched by the unlimited policy
 
 
 def test_publisher_legacy_ack_retries_stay_live():

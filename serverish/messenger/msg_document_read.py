@@ -110,10 +110,8 @@ class MsgDocumentReader(MsgReader):
 
         # Initial read - wait for first document
         try:
-            data, meta = await asyncio.wait_for(
-                self.read_next(),
-                timeout=self.initial_wait
-            )
+            async with asyncio.timeout(self.initial_wait):
+                data, meta = await self.read_next()
             await self.document._update(data)
             self._seq = meta['nats']['seq']
             log.info(f"Document loaded from {self.subject}: seq={self._seq}")

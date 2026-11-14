@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import warnings
+from dataclasses import replace
 
 import jsonschema
 import nats.errors
@@ -41,10 +42,15 @@ class MsgPublisher(MsgDriver):
         persistent (bool): Require the subject to be persistent (default `False`, `True` in serverish 3.0)
         raise_on_publish_error (bool): Raise on publish error (default `True`). When `False`, errors
             (a missing connection included) are logged and reported in the returned message instead
-        ack_timeout_retries (int): How many times to retry a publish for which no JetStream
-            ack arrived in time (default 2). Retries are deduplicated server-side via
-            ``Nats-Msg-Id``. When retries are exhausted, `MessengerPublishAckTimeout` is
-            raised (subject to `raise_on_publish_error`).
+        ack_timeout_retries (int | None): Legacy limit on the number of retries of a publish for
+            which no JetStream ack arrived in time; None (default) = as many as fit in the deadline.
+            Prefer ``error_policy=ErrorPolicy(retry=RetryPolicy(attempts=...))``.
+
+    Timing: a publish asks the server again whenever the confirmation does not
+    arrive within `RetryPolicy.attempt_timeout` (5 s) and gives up at its
+    deadline with `MessengerPublishAckTimeout` (subject to `raise_on_publish_error`).
+    The deadline is ``publish(timeout=...)`` or, without it, `RetryPolicy.total_timeout`
+    (15 s). `publish()` never takes longer than that.
 
     Health monitoring:
         The publisher tracks publish statistics accessible via `health_status` property:
@@ -57,14 +63,16 @@ class MsgPublisher(MsgDriver):
     persistent = param.Boolean(default=False, doc="Require the subject to be persistent: fail on open() and "
                                                   "publish() if published messages are not stored")
     raise_on_publish_error = param.Boolean(default=True, doc="Raise on publish error")
-    ack_timeout_retries = param.Integer(default=2, bounds=(0, None),
-                                        doc="Retries when JetStream ack does not arrive in time; "
-                                            "safe thanks to Nats-Msg-Id deduplication")
+    ack_timeout_retries = param.Integer(default=None, allow_None=True, bounds=(0, None),
+                                        doc="Legacy limit on retries when the JetStream ack does not arrive "
+                                            "in time; None = as many as fit in the deadline")
 
     #: Effective ack-retry pacing (docs/design/POLICIES.md §1.4: driver defaults
     #: live at the driver). Overridable via error_policy=ErrorPolicy(retry=...).
-    retry_defaults = RetryPolicy(attempts=2, delay=0.0, backoff=1.0,
-                                 max_delay=UNLIMITED, total_timeout=UNLIMITED)
+    #: Ask again after 5 s without a confirmation, give up after 15 s. The short
+    #: pause keeps a publish which fails at once from spinning until its deadline.
+    retry_defaults = RetryPolicy(attempts=UNLIMITED, delay=0.1, backoff=1.0, max_delay=UNLIMITED,
+                                 total_timeout=15.0, attempt_timeout=5.0)
 
     def __init__(self, error_policy: ErrorPolicy | None = None, **kwargs) -> None:
         # --- policy normalization (docs/design/POLICIES.md) ---
@@ -113,12 +121,15 @@ class MsgPublisher(MsgDriver):
             return self.errors.retry.resolved(self.retry_defaults)
         return RetryPolicy(attempts=self.ack_timeout_retries).resolved(self.retry_defaults)
 
-    async def publish(self, data: dict | None = None, meta: dict | None = None, **kwargs) -> dict:
+    async def publish(self, data: dict | None = None, meta: dict | None = None,
+                      timeout: float | None = None, **kwargs) -> dict:
         """Publishes a messages to publisher subject
 
         Args:
             data (dict): message data
             meta (dict): message metadata
+            timeout (float): deadline for the whole call in seconds, retries included;
+                None = `RetryPolicy.total_timeout` of the publisher (15 s by default)
             kwargs: additional arguments to pass to the connection
         Returns:
             dict: published message, or message to be published with the `error` tag in meta if failed
@@ -157,7 +168,7 @@ class MsgPublisher(MsgDriver):
         # silently dropping messages within the stream's duplicate window.
         headers.setdefault('Nats-Msg-Id', f"{self.messenger.instance_id}:{msg['meta']['id']}")
         try:
-            await self._publish_with_ack_retries(bdata, headers, msg['meta']['id'], **kwargs)
+            await self._publish_with_ack_retries(bdata, headers, msg['meta']['id'], timeout, **kwargs)
             # Track successful publish
             self._publish_count += 1
             self._last_publish_time = time.monotonic()
@@ -200,8 +211,9 @@ class MsgPublisher(MsgDriver):
                 msg['meta']['status'] = str(error)
         return msg
 
-    async def _publish_with_ack_retries(self, bdata: bytes, headers: dict, msg_id: str, **kwargs) -> None:
-        """Publishes to JetStream, retrying when the ack does not arrive in time
+    async def _publish_with_ack_retries(self, bdata: bytes, headers: dict, msg_id: str,
+                                        timeout: float | None = None, **kwargs) -> None:
+        """Publishes to JetStream, asking again when the ack does not arrive in time
 
         A missing ack does not mean the message was not delivered - it may
         well be stored while the ack was processed too late (e.g. starved
@@ -210,38 +222,50 @@ class MsgPublisher(MsgDriver):
         (2 minutes unless the stream says otherwise): a retry sequence which
         fits in the window never produces duplicates, a retry sent later can.
 
+        The deadline (`timeout`, else the policy's `total_timeout`) is hard:
+        an attempt is cut at it and none starts after it.
+
         Raises:
             MessengerNotConnected: JetStream is not connected
-            MessengerPublishAckTimeout: no ack after all retries
+            MessengerPublishAckTimeout: no ack before the deadline, or after all the retries allowed
         """
         js = self.connection.js
         if js is None:
             raise MessengerNotConnected(f"Trying to publish to subject '{self.subject}' failed. "
                                         f"JetStream not connected")
         retry = self._ack_retry
-        start = time.monotonic()
+        if timeout is not None:
+            retry = replace(retry, total_timeout=timeout)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
         attempt = 0
         while True:
+            # time for this attempt: its own allowance, cut at the deadline
+            budget = min(retry.attempt_timeout, retry.total_timeout - (loop.time() - start))
             try:
-                await js.publish(self.subject, bdata, headers=headers, **kwargs)
+                if budget <= 0:
+                    raise TimeoutError
+                async with asyncio.timeout(None if budget == UNLIMITED else budget):
+                    if budget == UNLIMITED:
+                        await js.publish(self.subject, bdata, headers=headers, **kwargs)
+                    else:
+                        await js.publish(self.subject, bdata, headers=headers, timeout=budget, **kwargs)
                 return
-            except nats.errors.TimeoutError as e:
-                elapsed = time.monotonic() - start
-                if retry.keeps_retrying(attempt, elapsed):
-                    delay = retry.delay_for(attempt, elapsed)
-                    log.warning(f"No JetStream ack for message {msg_id} on '{self.subject}' "
-                                f"(attempt {attempt + 1}), retrying"
-                                + (f" in {delay:.1f}s" if delay else "")
-                                + " - deduplicated by Nats-Msg-Id")
-                    if delay:
-                        await asyncio.sleep(delay)
-                    attempt += 1
-                    continue
-                raise MessengerPublishAckTimeout(
-                    f"No JetStream ack for message {msg_id} on '{self.subject}' "
-                    f"after {attempt + 1} attempts. The message MAY have been "
-                    f"delivered - a missing ack often means a starved client event loop, "
-                    f"not a delivery failure") from e
+            except TimeoutError as e:
+                elapsed = loop.time() - start
+                if not retry.keeps_retrying(attempt, elapsed):
+                    raise MessengerPublishAckTimeout(
+                        f"No JetStream ack for message {msg_id} on '{self.subject}' within {elapsed:.1f}s "
+                        f"({attempt + 1} attempt(s)). The message MAY have been delivered - a missing ack "
+                        f"often means a starved client event loop, not a delivery failure") from e
+                delay = retry.delay_for(attempt, elapsed)
+                log.warning(f"No JetStream ack for message {msg_id} on '{self.subject}' "
+                            f"(attempt {attempt + 1}), retrying"
+                            + (f" in {delay:.1f}s" if delay else "")
+                            + " - deduplicated by Nats-Msg-Id")
+                if delay:
+                    await asyncio.sleep(delay)
+                attempt += 1
 
     @property
     def health_status(self) -> dict:

@@ -61,7 +61,8 @@ class MsgSingleReader(MsgReader):
                 interval *= 2
 
         try:
-            data, meta = await asyncio.wait_for(self.read_next(), timeout=wait)
+            async with asyncio.timeout(wait):
+                data, meta = await self.read_next()
         finally:
             await self.close()
         return data, meta

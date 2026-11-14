@@ -16,7 +16,7 @@ import param
 from nats.js import JetStreamContext
 from nats.js.api import DeliverPolicy, ConsumerConfig
 
-from serverish.base import BurstLog, wait_for_psce
+from serverish.base import BurstLog
 from serverish.base.exceptions import (MessengerReaderStopped, MessengerReaderConfigError,
                                        MessengerNotConnected, MessengerJetStreamError,
                                        MessengerReaderAlreadyOpen, MessengerRequestTimeout)
@@ -158,6 +158,7 @@ class MsgReader(MsgDriver):
         self.batch = self.batching.max_batch or self.static_batch_default
         self._consume_stamps: deque[float] = deque(maxlen=32)  # recent consumption timestamps
         self._server_pending: int | None = None  # last num_pending reported by the server
+        self._server_answered: bool = False  # did the server answer the last fetch_available()
         self._last_batch: int | None = None      # previous dynamic pull size (growth damping)
         # --- end policy normalization ---
 
@@ -240,6 +241,26 @@ class MsgReader(MsgDriver):
             error: Exception = None
             error_since: float = field(default_factory=time.monotonic)  # start of current error streak
             retries: int = 0  # retries scheduled in the current error streak (not loop passes)
+            # cancel requests seen by the calling task when read_next() started
+            cancel_requests: int = field(default_factory=lambda: asyncio.current_task().cancelling())
+
+            def recovered(self) -> None:
+                """Ends the current error streak: the reader works again, with data or without"""
+                if self.error is not None:
+                    log.info(self.fmt("recovered"))
+                    self.error = None
+                    self.retries = 0
+
+            def raise_if_cancelled(self) -> None:
+                """Raises CancelledError when the calling task was cancelled during this read_next()
+
+                A cancellation can be lost below us: a timeout and a cancel landing in the
+                same loop step may surface as a plain TimeoutError (serverish#32), which the
+                waiting loop takes for "no message yet" and polls on for ever. The task still
+                knows it was asked to stop - honour that.
+                """
+                if asyncio.current_task().cancelling() > self.cancel_requests:
+                    raise asyncio.CancelledError
             last_consumer_check: float = field(default_factory=time.monotonic)
             consumer_check_interval: float = 10.0  # Check consumer health every 10 seconds
 
@@ -383,6 +404,8 @@ class MsgReader(MsgDriver):
                     log.debug(self.fmt(f"Pulling {batch} messages with timeout {fetch_timeout}s"))
                     new_msgs = await self.reader.fetch_available(batch=batch, timeout=fetch_timeout)
                     log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
+                    if self.reader._server_answered:
+                        self.recovered()  # the server answers: the failure is over, even with no data
 
                     # If no messages were available (got 404 from server or timeout), decide what to do
                     if len(new_msgs) == 0:
@@ -400,6 +423,7 @@ class MsgReader(MsgDriver):
                         max_wait_cycles = 50  # Total wait: 50 * 2s = 100s (unchanged)
 
                         for cycle in range(max_wait_cycles):
+                            self.raise_if_cancelled()
                             # Check for reconnection before each wait cycle
                             if self.reader._reconnect_needed.is_set():
                                 self.reader._reconnect_needed.clear()
@@ -441,6 +465,7 @@ class MsgReader(MsgDriver):
         st = _ReadNextState(self)
         # The loop which tries hard to get some data
         while True:
+            st.raise_if_cancelled()
             try:
                 # If the step method:
                 #  - retuns data                       - it will raiseReturnException
@@ -466,9 +491,7 @@ class MsgReader(MsgDriver):
                 log.debug(st.fmt(f"continue after: {e.task}"))
             except st.ReturnException as e:  # we have data to return
                 st.logput(f'{e.task}-ret')
-                if st.error is not None:
-                    log.info(st.fmt(f"recovered"))
-                    st.error = None
+                st.recovered()
                 log.debug(st.fmt(f"data returned"))
                 return e.data, e.meta
             except st.EndIterationException as e:
@@ -509,8 +532,7 @@ class MsgReader(MsgDriver):
                         log.error(st.fmt(f"finishing iteration on error: {e.error}"))
                         raise MessengerReaderStopped
                     case 'WAIT':
-                        elapsed = time.monotonic() - st.error_since
-                        if not self._retry.keeps_retrying(st.retries, elapsed):
+                        def give_up():
                             log.error(st.fmt(f"retry budget exhausted "
                                              f"(attempts={self._retry.attempts}, "
                                              f"total_timeout={self._retry.total_timeout}s), "
@@ -519,11 +541,17 @@ class MsgReader(MsgDriver):
                             if error is e.error:
                                 raise e.error
                             raise error from e.error
+
+                        elapsed = time.monotonic() - st.error_since
+                        if not self._retry.keeps_retrying(st.retries, elapsed):
+                            give_up()
                         wait_time = self._retry.delay_for(st.retries, elapsed)
                         st.retries += 1
                         burst_log.warning("Reading failed, retrying",
                                           st.fmt(f"read_next error, (retry in {wait_time:.1f}s): {e.error}"))
                         await asyncio.sleep(wait_time)
+                        if time.monotonic() - st.error_since >= self._retry.total_timeout:
+                            give_up()  # the deadline passed during the pause: no retry after it
                     case _:  # should not be reached
                         log.error(st.fmt(f"Invalid on_connection_close value {self.error_behavior}. "
                                          f"Report this as a bug to the serverish maintainers!"))
@@ -561,6 +589,7 @@ class MsgReader(MsgDriver):
         msgs = []
         needed = batch
         queue = pull_subscription._sub._pending_queue
+        self._server_answered = False
 
         # First, drain messages already in local queue
         while not queue.empty() and needed > 0:
@@ -616,7 +645,8 @@ class MsgReader(MsgDriver):
                 break
 
             try:
-                msg = await asyncio.wait_for(queue.get(), timeout=remaining)
+                async with asyncio.timeout(remaining):
+                    msg = await queue.get()
             except asyncio.TimeoutError:
                 log_backstop()
                 break
@@ -625,6 +655,7 @@ class MsgReader(MsgDriver):
                 break
             pull_subscription._sub._pending_size -= len(msg.data)
             queue.task_done()
+            self._server_answered = True  # a message or a status: the server is there
 
             status = JetStreamContext.is_status_msg(msg)
             if status == "404":
@@ -982,7 +1013,8 @@ class MsgReader(MsgDriver):
             self._msg_processed.clear()
             while self.push_subscription is not None and self.push_subscription.pending_msgs > 0:
                 to = timeout - (datetime.now() - now).total_seconds() if timeout is not None else None
-                await wait_for_psce(self._msg_processed.wait(), timeout=to)
+                async with asyncio.timeout(to):
+                    await self._msg_processed.wait()
                 self._msg_processed.clear()
 
 
