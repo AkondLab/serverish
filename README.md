@@ -28,6 +28,19 @@ this will install `nats-py` package.
 - Custom JetStream API replacing nats-py private internals access
 
 ## Changes
+* 2.5.1 A reader which is open reads. A recovery cut short by the network could leave a reader open and deaf
+  for good: its consumer alive on the server, the answers reaching nobody (seen in a long-running service
+  after a power outage). The reader now replaces its consumer and subscription as one, the new pair first,
+  and judges them by the server's answers to its own pull requests instead of asking whether the consumer
+  exists - one JetStream API request per reader every 10 s less. A missing consumer is never a fatal error,
+  a missing stream still is. `RetryPolicy.total_timeout` of a reader limits an attempt to recover as well,
+  not only the pauses between attempts.
+* 2.5 Deadlines and cancellation. **Python 3.11+.** `publish(timeout=X)` is now the deadline of the whole
+  call, retries included (it used to apply to each of up to 3 attempts); without it a publish gives up after
+  `RetryPolicy.total_timeout` (15 s; a journal entry after 5 s). New `RetryPolicy.attempt_timeout`. Every timeout
+  is a `MessengerTimeout`. A reader's `total_timeout` is a real deadline and its clock stops when the server
+  answers again. A cancelled `read_next()` always ends (a cancellation lost in the client library kept it
+  polling for ever). `wait_for_psce()` is deprecated: use `asyncio.timeout()`.
 * 2.4 Policy objects (`DeliveryPolicy`, `ErrorPolicy`/`RetryPolicy`, `BatchPolicy`) for typed driver
   configuration with backward-compatible string/kwarg forms; dynamic pull batching by default;
   driver lifecycle fixes (closed drivers leave the Messenger tree); deprecates

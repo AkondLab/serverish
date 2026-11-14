@@ -84,6 +84,35 @@ def nats_errors_translated(context: str) -> Iterator[None]:
         raise translate_nats_error(e, context) from e
 
 
+#: JetStream API `err_code` of "stream not found"
+_ERR_STREAM_NOT_FOUND = 10059
+
+
+def is_missing_stream(error: BaseException | None) -> bool:
+    """Tells whether a raw client library error says that the stream is not there
+
+    A 404 from JetStream names what is missing by its `err_code`. The stream missing is
+    a deployment error; a consumer missing (10014) is ordinary life of ephemeral consumers.
+    The client library raises the 404 on its own, with no `err_code`, in one place a reader
+    can meet: when it finds no stream storing the subject.
+    """
+    return (isinstance(error, nats.js.errors.NotFoundError)
+            and error.err_code in (None, _ERR_STREAM_NOT_FOUND))
+
+
+#: JetStream API `err_code` of "maximum consumers limit reached"
+_ERR_CONSUMER_LIMIT = 10026
+
+
+def is_consumer_limit(error: BaseException | None) -> bool:
+    """Tells whether a raw client library error says that the stream takes no more consumers
+
+    The server reports it as a 400, like a wrong configuration, but it is not one: a slot
+    is freed when any consumer of the stream goes away.
+    """
+    return isinstance(error, nats.js.errors.BadRequestError) and error.err_code == _ERR_CONSUMER_LIMIT
+
+
 def jetstream_error_code(error: Exception) -> int | None:
     """Returns the HTTP-like status code of a JetStream API error, raw or translated"""
     if isinstance(error, MessengerJetStreamError):

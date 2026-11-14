@@ -164,7 +164,8 @@ class MsgCoreReader(MsgDriver):
             if self._stop.is_set():
                 raise MessengerReaderStopped
             try:
-                item = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                async with asyncio.timeout(1.0):
+                    item = await self._queue.get()
                 self._queue.task_done()
                 return item
             except asyncio.TimeoutError:

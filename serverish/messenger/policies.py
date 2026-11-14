@@ -25,7 +25,7 @@ satellite kwargs is an error.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
 from enum import Enum
 
@@ -205,13 +205,18 @@ class RetryPolicy:
     """How to retry a failing operation.
 
     All fields default to None = "driver default". `UNLIMITED` is the
-    explicit no-limit marker for `attempts` and `total_timeout`.
+    explicit no-limit marker for `attempts` and the time limits.
+
+    `total_timeout` is a deadline, not a hint: no attempt and no pause reaches
+    past it. `attempt_timeout` is the time one attempt may take (publishers:
+    how long to wait for the server's confirmation before asking again).
     """
     attempts: int | float | None = None      # 0 = no retry; UNLIMITED = keep retrying
     delay: float | None = None               # initial inter-attempt delay [s]
     backoff: float | None = None             # delay multiplier per attempt (>= 1)
     max_delay: float | None = None           # cap for the growing delay [s]
-    total_timeout: float | None = None       # overall time budget [s]; UNLIMITED = none
+    total_timeout: float | None = None       # deadline for the whole operation [s]; UNLIMITED = none
+    attempt_timeout: float | None = None     # time allowed for one attempt [s]; UNLIMITED = none
 
     def __post_init__(self):
         if self.attempts is not None and self.attempts != UNLIMITED and (
@@ -219,19 +224,17 @@ class RetryPolicy:
             raise ValueError("RetryPolicy.attempts must be a non-negative int or UNLIMITED")
         if self.backoff is not None and self.backoff < 1:
             raise ValueError("RetryPolicy.backoff must be >= 1")
-        for name in ('delay', 'max_delay', 'total_timeout'):
+        for name in ('delay', 'max_delay', 'total_timeout', 'attempt_timeout'):
             v = getattr(self, name)
             if v is not None and v != UNLIMITED and v < 0:
                 raise ValueError(f"RetryPolicy.{name} must be non-negative")
+        if self.attempt_timeout == 0:
+            raise ValueError("RetryPolicy.attempt_timeout must be positive: no attempt succeeds in no time")
 
     def resolved(self, defaults: 'RetryPolicy') -> 'RetryPolicy':
         """Returns a copy with None fields filled from `defaults` (driver defaults)."""
-        return RetryPolicy(*(own if own is not None else default
-                             for own, default in zip(
-                                 (self.attempts, self.delay, self.backoff,
-                                  self.max_delay, self.total_timeout),
-                                 (defaults.attempts, defaults.delay, defaults.backoff,
-                                  defaults.max_delay, defaults.total_timeout))))
+        return RetryPolicy(**{f.name: own if (own := getattr(self, f.name)) is not None else getattr(defaults, f.name)
+                              for f in fields(self)})
 
     def delay_for(self, attempt: int, elapsed: float = 0.0) -> float:
         """Delay before retry number `attempt` (0-based), on a fully resolved policy.

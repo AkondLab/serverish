@@ -107,7 +107,8 @@ class MsgRpcRequester(MsgDriver):
             if wait is None:
                 raise MessengerRequestNoResultYet()
             try:
-                r = await asyncio.wait_for(asyncio.shield(t.task), wait)
+                async with asyncio.timeout(wait):
+                    r = await asyncio.shield(t.task)
             except asyncio.TimeoutError:
                 raise MessengerRequestNoResultYet()
             except asyncio.CancelledError:
