@@ -125,7 +125,7 @@ async def test_reader_recreates_expired_consumer(resilience_messenger, nats_disr
 
         # --- 5. VERIFY RECOVERY ---
         # The reader's read_next loop should detect the missing consumer via
-        # ensure_consumer() and call _reopen() to recreate it automatically.
+        # pull request finds no consumer and replace the session automatically.
         # Publish a new message and verify the reader receives it.
         await pub.publish(data={'phase': 'after_expiry', 'n': 2})
 
@@ -189,7 +189,7 @@ async def test_consumer_expiry_health_status_transitions(resilience_messenger, n
         await _poll_until_connected(m, timeout=20)
 
         # Start a read_next in background so the reader's loop can detect expiry
-        # and recreate the consumer via _reopen()
+        # and replace the consumer session
         read_task = asyncio.create_task(reader.read_next())
         # Give the reader loop time to detect the expired consumer and recreate
         await asyncio.sleep(3)

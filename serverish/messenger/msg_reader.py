@@ -19,9 +19,10 @@ from nats.js.api import DeliverPolicy, ConsumerConfig
 from serverish.base import BurstLog
 from serverish.base.exceptions import (MessengerReaderStopped, MessengerReaderConfigError,
                                        MessengerNotConnected, MessengerJetStreamError,
-                                       MessengerReaderAlreadyOpen, MessengerRequestTimeout)
+                                       MessengerReaderAlreadyOpen, MessengerRequestTimeout,
+                                       MessengerTransportTimeout)
 from serverish.base.fifoset import FifoSet
-from serverish.connection.nats_errors import nats_errors_translated, translate_nats_error
+from serverish.connection.nats_errors import is_missing_stream, nats_errors_translated, translate_nats_error
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver, subject_family
 from serverish.messenger.policies import (UNLIMITED, BatchPolicy, DeliveryPolicy, ErrorPolicy,
@@ -34,6 +35,32 @@ burst_log = BurstLog(log)
 
 class _ReconnectNeededError(Exception):
     pass
+
+
+@dataclass(eq=False)
+class _ConsumerSession:
+    """A JetStream consumer together with the local subscription its answers arrive on
+
+    The two are useful only as a pair: the consumer answers pull requests to the inbox
+    of the subscription. A reader holds one session, and replaces it as a whole.
+
+    The session is judged by the only thing that matters to the reader: do the server's
+    answers to its pull requests arrive. "The consumer exists on the server" proves less -
+    it stays true for a session whose subscription is lost.
+    """
+    subscription: JetStreamContext.PullSubscription
+    stream: str | None = None    # None: not known (a subscription assigned from outside)
+    consumer: str | None = None
+    unanswered: int = 0          # pull requests in a row the server did not answer
+    gone: bool = False           # the server said the consumer does not exist any more
+
+    def needs_replacement(self, unanswered_limit: int) -> str | None:
+        """Tells why the session cannot serve the reader any more, None if it can"""
+        if self.gone:
+            return "the consumer is gone (expired or deleted)"
+        if self.unanswered >= unanswered_limit:
+            return f"{self.unanswered} pull requests in a row got no answer"
+        return None
 
 class MsgReader(MsgDriver):
     """A class for reading data from a Messenger subject
@@ -163,7 +190,7 @@ class MsgReader(MsgDriver):
         # --- end policy normalization ---
 
         self.messages = deque()
-        self.pull_subscription: JetStreamContext.PullSubscription | None = None
+        self._session: _ConsumerSession | None = None
         self.push_subscription: JetStreamContext.PushSubscription | None = None
         self.last_seq: int | None = None
         self._stop: Event = Event()
@@ -187,6 +214,23 @@ class MsgReader(MsgDriver):
         # construction time rather than an opaque NATS 400 in the read loop.
         log.debug(f"Created {self}")
 
+
+    #: Pull requests in a row without any answer after which the session is replaced.
+    #: One lost answer may be a hiccup of the link; the second one, asked for after
+    #: the retry pause, is a pattern.
+    unanswered_limit = 2
+    #: A reader waiting for messages asks the server for an immediate answer at least
+    #: this often [s]: silence alone does not tell an idle subject from a lost session.
+    probe_interval = 10.0
+
+    @property
+    def pull_subscription(self) -> JetStreamContext.PullSubscription | None:
+        """The subscription of the current consumer session, None when the reader has none"""
+        return self._session.subscription if self._session is not None else None
+
+    @pull_subscription.setter
+    def pull_subscription(self, subscription: JetStreamContext.PullSubscription | None) -> None:
+        self._session = _ConsumerSession(subscription) if subscription is not None else None
 
     def __aiter__(self):
         log.debug(f"Entering iteration {self}")
@@ -241,6 +285,7 @@ class MsgReader(MsgDriver):
             error: Exception = None
             error_since: float = field(default_factory=time.monotonic)  # start of current error streak
             retries: int = 0  # retries scheduled in the current error streak (not loop passes)
+            deadline: asyncio.Timeout | None = None  # limits the current loop pass while failing
             # cancel requests seen by the calling task when read_next() started
             cancel_requests: int = field(default_factory=lambda: asyncio.current_task().cancelling())
 
@@ -250,6 +295,8 @@ class MsgReader(MsgDriver):
                     log.info(self.fmt("recovered"))
                     self.error = None
                     self.retries = 0
+                    if self.deadline is not None:
+                        self.deadline.reschedule(None)  # the deadline was the failure's, not the reader's
 
             def raise_if_cancelled(self) -> None:
                 """Raises CancelledError when the calling task was cancelled during this read_next()
@@ -261,8 +308,7 @@ class MsgReader(MsgDriver):
                 """
                 if asyncio.current_task().cancelling() > self.cancel_requests:
                     raise asyncio.CancelledError
-            last_consumer_check: float = field(default_factory=time.monotonic)
-            consumer_check_interval: float = 10.0  # Check consumer health every 10 seconds
+            last_probe: float = field(default_factory=time.monotonic)  # last pull request the server was asked to answer at once
 
             def async_shield(func):
                 @functools.wraps(func)
@@ -352,51 +398,33 @@ class MsgReader(MsgDriver):
                     raise self.EndIterationException('stop')
 
             @async_shield
-            async def ensure_consumer(self) -> None:
-                # Proactive health check: verify consumer exists periodically (every 10s)
-                # This prevents silent failures when ephemeral consumers expire
-                now = time.monotonic()
-                should_check = (
-                    self.error is not None or  # Always check after errors
-                    (now - self.last_consumer_check) > self.consumer_check_interval  # Periodic check
-                )
+            async def ensure_session(self) -> None:
+                """Replaces the consumer session when it cannot serve the reader any more
 
-                if should_check:
-                    self.last_consumer_check = now
-                    self.reader._last_health_check_time = now
-                    try:
-                        ci = await self.reader.pull_subscription.consumer_info()
-                        # Consumer exists and is accessible
-                        log.debug(self.fmt(f"Consumer health check OK: {ci.name}"))
-                    except nats.js.errors.NotFoundError:
-                        burst_log.warning("Consumer has gone",
-                                          self.fmt("Consumer has gone (detected by health check), recreating"))
-                        await self.reader._reopen()
-                        log.info(self.fmt(f"Consumer re-opened after health check detected loss"))
-                        raise self.ContinueException('reopen')
-                    except Exception as e:
-                        burst_log.warning("Consumer health check failed",
-                                          self.fmt(f"Error during consumer health check: {e}, will try to recreate"))
-                        await self.reader._reopen()
-                        log.info(self.fmt(f"Consumer re-opened after health check error"))
-                        raise self.ContinueException('reopen')
-
-            @async_shield
-            async def check_reconnect_needed(self) -> None:
-                """Check if NATS reconnection occurred and recreate consumer if needed"""
-                if self.reader._reconnect_needed.is_set():
-                    self.reader._reconnect_needed.clear()
-                    log.info(self.fmt("NATS reconnection detected, recreating consumer"))
-                    await self.reader._reopen()
-                    log.info(self.fmt("Consumer recreated after NATS reconnection"))
-                    raise self.ContinueException('reconnect')
+                What is wrong with the session is learnt from the pull requests themselves
+                (`fetch_available`), at no cost: an answer proves the whole path, from the
+                consumer on the server to the queue of this reader.
+                """
+                reader = self.reader
+                if reader._reconnect_needed.is_set():
+                    reader._reconnect_needed.clear()
+                    reason = "NATS reconnected"
+                elif reader._session is None:
+                    reason = "the reader has no consumer session"
+                else:
+                    reason = reader._session.needs_replacement(reader.unanswered_limit)
+                if reason is None:
+                    return
+                burst_log.warning("Replacing the consumer session",
+                                  self.fmt(f"{reason}, replacing the consumer session"))
+                await reader._replace_session()
+                log.info(self.fmt("Consumer session replaced"))
+                raise self.ContinueException('session')
 
             @async_shield
             async def read_batch(self) -> None:
                 if len(self.reader.messages) == 0:
-                    # Check for reconnection before fetching
-                    await self.check_reconnect_needed()
-
+                    session = self.reader._session
                     # For fetch_available, timeout is network latency budget (not message wait time)
                     # Server responds immediately with no_wait=True, we just account for slow networks
                     fetch_timeout = 2.0  # Reduced - should be quick with no_wait
@@ -404,10 +432,25 @@ class MsgReader(MsgDriver):
                     log.debug(self.fmt(f"Pulling {batch} messages with timeout {fetch_timeout}s"))
                     new_msgs = await self.reader.fetch_available(batch=batch, timeout=fetch_timeout)
                     log.debug(self.fmt(f"Pulled {len(new_msgs)} messages"))
-                    if self.reader._server_answered:
-                        self.recovered()  # the server answers: the failure is over, even with no data
+                    self.last_probe = time.monotonic()
+                    if not self.reader._server_answered and not session.gone:
+                        # Silence. Older servers (seen: 2.10) are also silent when the consumer
+                        # is gone, newer ones say so (503) - ask, this once, which silence it is
+                        session.gone = await self.reader._consumer_is_gone(session)
+                    if session.gone:
+                        # an ephemeral consumer expiring is ordinary life (a frozen client,
+                        # a restarted server), not an error: the next pass replaces the session
+                        raise self.ContinueException('gone')
+                    if not self.reader._server_answered:
+                        # No data and no "no data": the answers do not reach us. This is the
+                        # failure, whatever the cause; the retry policy paces what follows
+                        raise MessengerTransportTimeout(
+                            f"The server did not answer a pull request for '{self.reader.subject}' "
+                            f"within {fetch_timeout} s")
+                    self.reader._last_health_check_time = self.last_probe
+                    self.recovered()  # the server answers: the failure is over, even with no data
 
-                    # If no messages were available (got 404 from server or timeout), decide what to do
+                    # If no messages were available (404 from the server), decide what to do
                     if len(new_msgs) == 0:
                         if self.reader.nowait:
                             # Server confirmed no messages - finish iteration
@@ -415,34 +458,26 @@ class MsgReader(MsgDriver):
                             raise self.EndIterationException('nowait')
 
                         # Non-nowait mode: wait for NEW messages to arrive.
-                        # Break into shorter intervals so the reconnect-needed
-                        # check at the top of the loop runs often enough that
-                        # low-rate subjects don't sit on a stale subscription
-                        # for tens of seconds after a NATS reconnect.
+                        # Break into shorter intervals so a NATS reconnect is noticed
+                        # soon and low-rate subjects don't sit on a stale session.
                         blocking_interval = 2.0
-                        max_wait_cycles = 50  # Total wait: 50 * 2s = 100s (unchanged)
-
-                        for cycle in range(max_wait_cycles):
+                        while not self.reader._reconnect_needed.is_set():
                             self.raise_if_cancelled()
-                            # Check for reconnection before each wait cycle
-                            if self.reader._reconnect_needed.is_set():
-                                self.reader._reconnect_needed.clear()
-                                log.info(self.fmt("NATS reconnection detected during wait, recreating consumer"))
-                                await self.reader._reopen()
-                                raise self.ContinueException('reconnect_during_wait')
-
-                            log.debug(self.fmt(f"Waiting for messages (cycle {cycle + 1}/{max_wait_cycles}, {blocking_interval}s)"))
+                            log.debug(self.fmt(f"Waiting for messages ({blocking_interval}s)"))
                             try:
-                                new_msgs = await self.reader.pull_subscription.fetch(1, timeout=blocking_interval)
+                                new_msgs = await session.subscription.fetch(1, timeout=blocking_interval)
                                 if new_msgs:
                                     log.debug(self.fmt(f"Received {len(new_msgs)} new message(s)"))
                                     break
                             except asyncio.TimeoutError:
-                                # Timeout is normal. The consumer may have expired meanwhile, but asking
-                                # the server after every cycle is a JetStream API request per reader
-                                # every 2 s; the periodic health check asks often enough.
-                                if time.monotonic() - self.last_consumer_check > self.consumer_check_interval:
-                                    break  # back to the main loop: ensure_consumer() runs the health check
+                                # Normal: no message came. It is also all a broken session would
+                                # show here, so the main loop asks the server now and then - a
+                                # no_wait pull is always answered, with messages or without
+                                if time.monotonic() - self.last_probe > self.reader.probe_interval:
+                                    break
+                            except nats.js.errors.ServiceUnavailableError:
+                                session.gone = True  # nobody answers the pull requests: no such consumer
+                                break
                             except Exception as e:
                                 burst_log.warning("Waiting for messages failed",
                                                   self.fmt(f"Error waiting for messages: {e}"))
@@ -463,29 +498,59 @@ class MsgReader(MsgDriver):
                 self.log.append(msg)
 
         st = _ReadNextState(self)
+
+        def give_up(error: Exception):
+            log.error(st.fmt(f"retry budget exhausted "
+                             f"(attempts={self._retry.attempts}, "
+                             f"total_timeout={self._retry.total_timeout}s), "
+                             f"raising: {error}"))
+            translated = translate_nats_error(error, f"Reading from '{self.subject}' failed")
+            if translated is error:
+                raise error
+            raise translated from error
+
+        def recovery_deadline() -> float | None:
+            """Seconds left for the reader to recover, None when nothing limits this pass
+
+            `total_timeout` is the deadline of a failure: it limits the attempts to recover
+            as well as the pauses between them. A healthy reader waits for messages for ever.
+            """
+            if st.error is None or self.error_behavior != 'WAIT' or self._retry.total_timeout == UNLIMITED:
+                return None
+            return max(self._retry.total_timeout - (time.monotonic() - st.error_since), 0.0)
+
         # The loop which tries hard to get some data
         while True:
             st.raise_if_cancelled()
+            failing = st.error
             try:
-                # If the step method:
-                #  - retuns data                       - it will raiseReturnException
-                #  - corrected something               - it will raise ContinueException
-                #  - wants stop iteration              - it will raise EndIterationException
-                #  - encounters an unrecoverable error - it will raise ErrorException
-                #  - did not do anything               - it will return and next step will be called
-                # Those mthod should not raise any other exceptions, if they do, it is a bug,
-                # this is enforced by @async_shield (conversion of nay exception to ErrorException)
+                async with asyncio.timeout(recovery_deadline()) as deadline:
+                    st.deadline = deadline
+                    # If the step method:
+                    #  - retuns data                       - it will raiseReturnException
+                    #  - corrected something               - it will raise ContinueException
+                    #  - wants stop iteration              - it will raise EndIterationException
+                    #  - encounters an unrecoverable error - it will raise ErrorException
+                    #  - did not do anything               - it will return and next step will be called
+                    # Those mthod should not raise any other exceptions, if they do, it is a bug,
+                    # this is enforced by @async_shield (conversion of nay exception to ErrorException)
 
-                # 0. Do we have some data to return already?
-                await st.pop_msg()
-                # 1. Check if iteration have been stopped externally
-                await st.ensure_not_stopped()
-                # 2. Is it at least open?
-                await st.ensure_open()
-                # 3. Check consumer, maybe ephemeral consumer is gone
-                await st.ensure_consumer()
-                # 4. Pull batch of  messages
-                await st.read_batch()
+                    # 0. Do we have some data to return already?
+                    await st.pop_msg()
+                    # 1. Check if iteration have been stopped externally
+                    await st.ensure_not_stopped()
+                    # 2. Is it at least open?
+                    await st.ensure_open()
+                    # 3. Replace the consumer session if it stopped serving us
+                    await st.ensure_session()
+                    # 4. Pull batch of  messages
+                    await st.read_batch()
+            except TimeoutError:
+                if not deadline.expired():
+                    raise  # not the deadline of this pass: nothing here may let one out
+                if st.error is not None:  # else: recovered in the very moment the deadline fired
+                    st.logput('deadline')
+                    give_up(failing)  # the failure outlasted total_timeout in the middle of an attempt
             except st.ContinueException as e:  # one of the method did something
                 st.logput(f'{e.task}-ok')
                 log.debug(st.fmt(f"continue after: {e.task}"))
@@ -513,9 +578,10 @@ class MsgReader(MsgDriver):
                     log.error(st.fmt(f"fatal reader configuration error (not retrying): {e.error}"))
                     self._stop.set()
                     raise e.error
+                # A missing consumer is not among them: ephemeral consumers come and go,
+                # the session is replaced. A missing stream is a deployment error.
                 cause = e.error.__cause__ if isinstance(e.error, MessengerJetStreamError) else e.error
-                if isinstance(cause, (nats.js.errors.BadRequestError,
-                                      nats.js.errors.NotFoundError)):
+                if isinstance(cause, nats.js.errors.BadRequestError) or is_missing_stream(cause):
                     log.error(st.fmt(f"fatal NATS error (not retrying): {e.error}"))
                     self._stop.set()
                     raise MessengerReaderConfigError(
@@ -532,26 +598,16 @@ class MsgReader(MsgDriver):
                         log.error(st.fmt(f"finishing iteration on error: {e.error}"))
                         raise MessengerReaderStopped
                     case 'WAIT':
-                        def give_up():
-                            log.error(st.fmt(f"retry budget exhausted "
-                                             f"(attempts={self._retry.attempts}, "
-                                             f"total_timeout={self._retry.total_timeout}s), "
-                                             f"raising: {e.error}"))
-                            error = translate_nats_error(e.error, f"Reading from '{self.subject}' failed")
-                            if error is e.error:
-                                raise e.error
-                            raise error from e.error
-
                         elapsed = time.monotonic() - st.error_since
                         if not self._retry.keeps_retrying(st.retries, elapsed):
-                            give_up()
+                            give_up(e.error)
                         wait_time = self._retry.delay_for(st.retries, elapsed)
                         st.retries += 1
                         burst_log.warning("Reading failed, retrying",
                                           st.fmt(f"read_next error, (retry in {wait_time:.1f}s): {e.error}"))
                         await asyncio.sleep(wait_time)
                         if time.monotonic() - st.error_since >= self._retry.total_timeout:
-                            give_up()  # the deadline passed during the pause: no retry after it
+                            give_up(e.error)  # the deadline passed during the pause: no retry after it
                     case _:  # should not be reached
                         log.error(st.fmt(f"Invalid on_connection_close value {self.error_behavior}. "
                                          f"Report this as a bug to the serverish maintainers!"))
@@ -585,7 +641,8 @@ class MsgReader(MsgDriver):
         """
         import json
 
-        pull_subscription = self.pull_subscription
+        session = self._session
+        pull_subscription = session.subscription
         msgs = []
         needed = batch
         queue = pull_subscription._sub._pending_queue
@@ -656,6 +713,7 @@ class MsgReader(MsgDriver):
             pull_subscription._sub._pending_size -= len(msg.data)
             queue.task_done()
             self._server_answered = True  # a message or a status: the server is there
+            session.unanswered = 0
 
             status = JetStreamContext.is_status_msg(msg)
             if status == "404":
@@ -666,10 +724,19 @@ class MsgReader(MsgDriver):
                 # Request Timeout - server closed the request after a partial batch
                 log.debug(f"{self} Server closed partial batch (408 status)")
                 break
+            elif status == "503" or (status == "409" and "Consumer Deleted" in self._status_description(msg)):
+                # No responders for the pull request / the consumer deleted under it:
+                # the server is there, the consumer is not
+                log.debug(f"{self} Server reports the consumer is gone ({status} status)")
+                session.gone = True
+                break
+            elif status == "100":
+                continue  # a heartbeat, the answer is still to come
             elif status:
-                # Other status message (shouldn't happen with pull, but handle it)
-                log.debug(f"{self} Received status: {status}")
-                continue
+                # The server closed the request for another reason (e.g. 409 on a limit
+                # of the consumer): there is nothing more to wait for in this request
+                log.debug(f"{self} Server closed the request: {status} {self._status_description(msg)}")
+                break
 
             # Real message
             msgs.append(msg)
@@ -693,7 +760,14 @@ class MsgReader(MsgDriver):
             # num_pending unknown (no JS metadata): keep reading until a
             # closing status arrives or the backstop hits (degraded mode)
 
+        if not self._server_answered:
+            session.unanswered += 1
         return msgs
+
+    @staticmethod
+    def _status_description(msg: Msg) -> str:
+        """Returns the description of a JetStream status message, '' if it has none"""
+        return (msg.headers or {}).get('Description') or ''
 
     def _next_batch_size(self) -> int:
         """Pull size for the next request.
@@ -759,37 +833,38 @@ class MsgReader(MsgDriver):
             MessengerRequestTimeout: the server did not create the consumer in time
             MessengerTransportError: any other failure of the underlying NATS client
         """
-        if self.pull_subscription is not None:
+        if self._session is not None:
             raise MessengerReaderAlreadyOpen("Reader already open, do not reuse MsgReader instances")
 
         log.debug(f"Opening {self}")
-        js = self.connection.js
-
         self.connection.add_reconnect_cb(self.on_nats_reconnect)
-
-
-        consumer_conf = await self._create_consumer_cfg()
-
-        log.debug(f"Creating pull subscription for {self}")
-        self.pull_subscription = await self._create_pull_subscribtion(consumer_conf)
-
-        # if consumer_conf.deliver_policy != DeliverPolicy.NEW:
-        #     log.debug(f"Creating pull subscription for {self}")
-        #     self.pull_subscription = await self._create_pull_subscribtion(consumer_conf)
-        # else:
-        #     log.debug(f"Creating push subscription for {self}")
-        #     self.push_subscription = await js.subscribe(self.subject,
-        #                                                 config=consumer_conf)
-
-        # self._emptied.set()
+        self._session = await self._create_session()
         await super().open()
 
-    async def _create_pull_subscribtion(self, consumer_conf: ConsumerConfig):
-        # Durable consumer is probably not needed (at least problematic)
-        # consumer_conf.durable_name = self.name if consumer_conf.durable_name is None else consumer_conf.durable_name
+    async def _create_session(self, resume: bool = False) -> _ConsumerSession:
+        """Creates a consumer on the server and the subscription its answers arrive on
+
+        One attempt, all or nothing: on any failure, a cancellation included, nothing
+        is left behind for the reader to hold.
+
+        Args:
+            resume: continue after the last message read, instead of the reader's delivery policy
+
+        Raises:
+            MessengerReaderConfigError: no stream stores the subject, or the server refuses the reader
+            MessengerNotConnected: no connection to subscribe through
+            MessengerRequestTimeout: the server did not create the consumer in time
+            MessengerTransportError: any other failure of the underlying NATS client
+        """
         if self.connection is None or self.connection.js is None:
             raise MessengerNotConnected('Cannot create pull subscription, not connected to NATS')
         js = self.connection.js
+        consumer_conf = await self._create_consumer_cfg()
+        if resume and self.last_seq is not None:
+            log.info(f"New consumer session of {self} continues from seq={self.last_seq + 1}")
+            consumer_conf.deliver_policy = DeliverPolicy.BY_START_SEQUENCE
+            consumer_conf.opt_start_time = None
+            consumer_conf.opt_start_seq = self.last_seq + 1
         with nats_errors_translated(f"Creating consumer for '{self.subject}' failed"):
             try:
                 subject, stream, filters = self.subject, None, None
@@ -801,17 +876,89 @@ class MsgReader(MsgDriver):
                         subject = filters[0]  # only this part of the family is persistent
                     elif filters:
                         consumer_conf.filter_subjects = filters
-                ret = await js.pull_subscribe(subject,
-                                              durable=consumer_conf.durable_name,
-                                              stream=stream,
-                                              config=consumer_conf)
+                subscription = await js.pull_subscribe(subject,
+                                                       durable=consumer_conf.durable_name,
+                                                       stream=stream,
+                                                       config=consumer_conf)
             except nats.errors.TimeoutError as e:
                 raise MessengerRequestTimeout(
                     f"Creating consumer for '{self.subject}' timed out: {e}") from e
-            ci = await ret.consumer_info()
-            if filters:
-                await self._verify_family_filters(ret, ci, filters)
-        return ret
+            except nats.js.errors.NotFoundError as e:
+                if is_missing_stream(e):
+                    raise MessengerReaderConfigError(
+                        f"No stream stores the subject '{self.subject}': {e}") from e
+                raise
+            try:
+                ci = await subscription.consumer_info()
+                if filters:
+                    await self._verify_family_filters(subscription, ci, filters)
+            except BaseException:
+                # Subscribed, but not a session yet: nobody would ever hold this subscription.
+                # The consumer, if it was created, expires by itself - nobody pulls from it.
+                try:
+                    await subscription.unsubscribe()
+                except Exception as e:
+                    log.debug(f"{self} could not drop the subscription of a failed session: {e}")
+                raise
+        return _ConsumerSession(subscription, stream=ci.stream_name, consumer=ci.name)
+
+    async def _consumer_is_gone(self, session: _ConsumerSession) -> bool:
+        """Tells whether the server knows the consumer of the session no more
+
+        Asked only when a pull request got no answer, never as a routine: a consumer
+        which exists says nothing about the session being usable.
+
+        Raises:
+            nats.js.errors.NotFoundError: the stream itself is gone
+        """
+        try:
+            await session.subscription.consumer_info()
+        except nats.js.errors.NotFoundError as e:
+            if is_missing_stream(e):
+                raise
+            return True
+        except Exception as e:
+            log.debug(f"{self} no answer about the consumer either: {e}")
+        return False
+
+    async def _replace_session(self) -> None:
+        """Gives the reader a new consumer session, continuing after the last message read
+
+        The new session is complete before the old one is touched, so a failure leaves
+        the reader exactly as it was: with a session it can use, or try to replace again.
+        One attempt - whoever calls paces the retries (the reader loop: its RetryPolicy).
+        """
+        new = await self._create_session(resume=True)
+        old, self._session = self._session, new
+        self._reconnect_count += 1
+        if old is not None:
+            await self._discard_session(old)
+
+    async def _discard_session(self, session: _ConsumerSession) -> None:
+        """Removes a session the reader does not hold any more; best effort, never fails
+
+        Whatever cannot be removed now removes itself: a consumer nobody pulls from
+        expires on the server (`inactive_threshold`).
+        """
+        stream, consumer = session.stream, session.consumer
+        try:
+            if consumer is None:  # a subscription assigned from outside: ask who it is
+                ci = await session.subscription.consumer_info()
+                stream, consumer = ci.stream_name, ci.name
+        except Exception as e:
+            log.debug(f"{self} could not identify the consumer of a discarded session: {e}")
+        try:
+            await session.subscription.unsubscribe()
+        except Exception as e:
+            log.debug(f"{self} could not unsubscribe a discarded session: {e}")
+        if consumer is not None:
+            try:
+                await self.connection.js.delete_consumer(stream=stream, consumer=consumer)
+            except nats.js.errors.NotFoundError:
+                pass  # gone already
+            except Exception as e:
+                log.debug(f"{self} could not delete consumer {consumer} of a discarded session "
+                          f"(it will expire): {e}")
 
     async def _resolve_family(self) -> tuple[str | None, list[str]]:
         """Finds where the subject family is stored and which of its patterns are
@@ -865,62 +1012,6 @@ class MsgReader(MsgDriver):
             f"The server does not filter the subject family of '{self.subject}' (asked for {filters}, "
             f"got {enforced or 'no filter'}). Subject families on persistent subjects need NATS server 2.10 or newer")
 
-    async def _reopen(self) -> None:
-        """Reopens the pull subscription with retry logic and better error handling"""
-        self._reconnect_count += 1
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # Clean up existing subscription. `unsubscribe()` only detaches the
-                # local handle; the JetStream consumer must be deleted explicitly
-                # or it leaks server-side across every reconnect (one orphan per
-                # reopen, accumulating until the stream's consumer cap or the
-                # process restarts).
-                if self.pull_subscription is not None:
-                    try:
-                        ci = await self.pull_subscription.consumer_info()
-                    except Exception as e:
-                        log.debug(f"Error fetching consumer_info during reopen attempt {attempt + 1}: {e}")
-                        ci = None
-                    try:
-                        await self.pull_subscription.unsubscribe()
-                    except Exception as e:
-                        log.debug(f"Error unsubscribing during reopen attempt {attempt + 1}: {e}")
-                    if ci is not None:
-                        try:
-                            await self.connection.js.delete_consumer(stream=ci.stream_name, consumer=ci.name)
-                        except nats.js.errors.NotFoundError:
-                            pass  # already gone, nothing to delete
-                        except Exception as e:
-                            log.debug(f"Error deleting old consumer during reopen attempt {attempt + 1}: {e}")
-                
-                # Create new consumer configuration
-                consumer_conf = await self._create_consumer_cfg()
-                
-                # Set policy for 'new messages' if any message was received
-                if self.last_seq is not None:
-                    log.info(f"Reopening {self}, from seq={self.last_seq + 1}")
-                    consumer_conf.deliver_policy = DeliverPolicy.BY_START_SEQUENCE
-                    consumer_conf.opt_start_time = None
-                    consumer_conf.opt_start_seq = self.last_seq + 1
-                
-                # Create new subscription
-                self.pull_subscription = await self._create_pull_subscribtion(consumer_conf=consumer_conf)
-                log.info(f"Successfully reopened {self} after {attempt + 1} attempts")
-                return  # Success!
-                
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    log.error(f"Failed to reopen {self} after {max_retries} attempts: {e}")
-                    raise
-                
-                wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
-                burst_log.warning("Reopening the reader failed, retrying",
-                                  f"{self} Reopen attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
-                await asyncio.sleep(wait_time)
-
-
-
     async def _create_consumer_cfg(self) -> ConsumerConfig:
         cfg = self.consumer_cfg.copy()
 
@@ -965,20 +1056,10 @@ class MsgReader(MsgDriver):
     async def close(self) -> None:
         self.connection.remove_reconnect_cb(self.on_nats_reconnect)
         await super().close()
-        await self._close_pull_subscription()
+        session, self._session = self._session, None
+        if session is not None:
+            await self._discard_session(session)
         await self._close_push_subscription()
-
-    async def _close_pull_subscription(self) -> None:
-        if self.pull_subscription is not None:
-            try:
-                ci = await self.pull_subscription.consumer_info()
-                await self.pull_subscription.unsubscribe()
-                await self.connection.js.delete_consumer(stream=ci.stream_name, consumer=ci.name)
-            except nats.js.errors.NotFoundError:
-                pass  # no consumer is ok
-            except Exception as e:
-                log.warning(f'Exception while closing PULL subscription: {e}')
-            self.pull_subscription = None
 
     async def _close_push_subscription(self) -> None:
         if self.push_subscription is not None:
@@ -1075,9 +1156,9 @@ class MsgReader(MsgDriver):
                 - messages_received: Total count of messages received
                 - last_message_time: Timestamp of last message (monotonic time) or None
                 - last_message_ago: Seconds since last message or None if no messages yet
-                - reconnect_count: Number of times the consumer was recreated
+                - reconnect_count: Number of times the consumer session was replaced
                 - last_error: String representation of last error or None
-                - last_health_check_time: Timestamp of last health check or None
+                - last_health_check_time: Timestamp (monotonic time) of the last pull request the server answered, or None
                 - pending_messages: Number of messages in local pending queue
                 - pending_bytes: Bytes in local pending queue
                 - connection_slow_consumers: Slow consumer count from connection (for diagnostics)
