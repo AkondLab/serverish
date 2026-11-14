@@ -4,14 +4,16 @@ The cases come from the observatory outage of 2026-11-14, where readers of a lon
 service stayed open and deaf for hours after the network was back.
 """
 import asyncio
+import json
+import uuid
 
 import nats.errors
 import nats.js.errors
 import pytest
 
-from serverish.base import MessengerReaderConfigError
-from serverish.connection.nats_errors import is_missing_stream
-from serverish.messenger import ErrorPolicy, OnError, RetryPolicy, get_publisher, get_reader
+from serverish.base import MessengerJetStreamError, MessengerReaderConfigError
+from serverish.connection.nats_errors import is_consumer_limit, is_missing_stream
+from serverish.messenger import BatchPolicy, ErrorPolicy, OnError, RetryPolicy, get_publisher, get_reader
 
 pytestmark = [pytest.mark.nats, pytest.mark.timeout(40)]
 
@@ -81,6 +83,12 @@ def test_only_a_missing_stream_is_a_deployment_error():
     assert not is_missing_stream(nats.js.errors.NotFoundError(code=404, err_code=10014))  # consumer not found
     assert not is_missing_stream(nats.js.errors.ServiceUnavailableError(code=503))
     assert not is_missing_stream(nats.errors.TimeoutError())
+
+
+def test_a_full_stream_is_not_a_wrong_configuration():
+    assert is_consumer_limit(nats.js.errors.BadRequestError(code=400, err_code=10026))    # maximum consumers limit reached
+    assert not is_consumer_limit(nats.js.errors.BadRequestError(code=400, err_code=10012))
+    assert not is_consumer_limit(nats.js.errors.NotFoundError(code=404, err_code=10014))
 
 
 async def test_subject_without_a_stream_is_refused_at_open(messenger):
@@ -202,17 +210,84 @@ async def test_half_made_session_leaves_no_subscription_behind(messenger, unique
         await r.publish_and_expect(1)
 
 
-async def test_durable_consumer_survives_the_replacement_of_its_session(messenger, unique_subject):
-    """A durable consumer is bound by the new session, not created: removing the old session must not remove it."""
+async def test_durable_consumer_is_created_anew_under_its_name(messenger, unique_subject):
+    """A durable consumer is its name: the new session has it, continuing after the last message read."""
     durable = 'durable_' + unique_subject.rsplit('.', 1)[-1]
     async with Reading(unique_subject, error_policy=FAST, durable_name=durable) as r:
         old = r.reader._session
         assert old.consumer == durable
         await r.reader._replace_session()
         assert r.reader._session is not old and r.reader._session.consumer == durable
-        await r.reader.connection.js.consumer_info(old.stream, durable)   # raises if it was deleted
+        info = await r.reader.connection.js.consumer_info(old.stream, durable)
+        assert info.config.opt_start_seq == r.reader.last_seq + 1
         await r.publish_and_expect(1)
         assert r.reader.health_status['reconnect_count'] == 1             # no second replacement was needed
+
+
+async def test_durable_reader_loses_nothing_delivered_to_the_session_it_gave_up(messenger, unique_subject):
+    """Messages the server delivered to the old session and nobody read come again, in order, before newer ones."""
+    durable = 'durable_' + unique_subject.rsplit('.', 1)[-1]
+    publisher = get_publisher(unique_subject)
+    reader = get_reader(unique_subject, deliver_policy='all', error_policy=FAST, durable_name=durable)
+    await publisher.open()
+    await reader.open()
+    try:
+        for n in range(5):
+            await publisher.publish(data={'n': n})
+        assert (await reader.read_next())[0] == {'n': 0}
+        old = reader.pull_subscription
+        # the server delivers further messages to the session which is about to be given up
+        await reader.connection.nc.publish(old._nms, b'{"batch": 2, "no_wait": true}', old._deliver)
+        async with asyncio.timeout(5):
+            while old._sub._pending_queue.qsize() < 2:
+                await asyncio.sleep(0.02)
+        await reader._replace_session()
+        await publisher.publish(data={'n': 5})
+        got = []
+        async with asyncio.timeout(10):
+            while len(got) < 5:
+                got.append((await reader.read_next())[0]['n'])
+        assert got == [1, 2, 3, 4, 5]
+    finally:
+        await reader.close()
+        await publisher.close()
+
+
+async def test_session_is_replaced_on_a_stream_with_no_spare_consumer(messenger):
+    """No slot for "the new one first": the old consumer is given up, the reader reads on."""
+    token = uuid.uuid4().hex[:8]
+    js = messenger.connection.js
+    await js.add_stream(name=f'full_{token}', subjects=[f'full.{token}.>'], storage='memory', max_consumers=1)
+    try:
+        async with Reading(f'full.{token}.x', error_policy=FAST) as r:
+            old = r.reader._session
+            await r.reader._replace_session()
+            assert r.reader._session is not old
+            await r.publish_and_expect(1)
+            # ... also when the loop finds out by itself, and when it has to wait for the slot
+            await r.reader._session.subscription.unsubscribe()
+            await r.publish_and_expect(2)
+    finally:
+        await js.delete_stream(f'full_{token}')
+
+
+async def test_refused_pull_request_is_an_error_not_an_empty_subject(messenger, unique_subject):
+    """A consumer limited to smaller requests than the reader makes: every pull is refused, and the reader says so."""
+    reader = get_reader(unique_subject, deliver_policy='new', error_policy=ErrorPolicy(on_error=OnError.RAISE),
+                        batch_policy=BatchPolicy(dynamic=False, max_batch=5))
+    await reader.open()
+    try:
+        js = reader.connection.js
+        info = await reader.pull_subscription.consumer_info()
+        config = {k: v for k, v in info.config.as_dict().items() if v is not None} | {'max_batch': 1}
+        await js._api_request(f'{js._prefix}.CONSUMER.CREATE.{info.stream_name}.{info.name}',
+                              json.dumps({'stream_name': info.stream_name, 'config': config,
+                                          'action': 'update'}).encode(), timeout=2)
+        with pytest.raises(MessengerJetStreamError, match='Exceeded MaxRequestBatch') as refused:
+            await reader.read_next()
+        assert refused.value.code == 409
+    finally:
+        await reader.close()
 
 
 async def test_messages_waiting_in_the_local_queue_are_delivered(messenger, unique_subject):

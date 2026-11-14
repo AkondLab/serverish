@@ -100,6 +100,19 @@ def is_missing_stream(error: BaseException | None) -> bool:
             and error.err_code in (None, _ERR_STREAM_NOT_FOUND))
 
 
+#: JetStream API `err_code` of "maximum consumers limit reached"
+_ERR_CONSUMER_LIMIT = 10026
+
+
+def is_consumer_limit(error: BaseException | None) -> bool:
+    """Tells whether a raw client library error says that the stream takes no more consumers
+
+    The server reports it as a 400, like a wrong configuration, but it is not one: a slot
+    is freed when any consumer of the stream goes away.
+    """
+    return isinstance(error, nats.js.errors.BadRequestError) and error.err_code == _ERR_CONSUMER_LIMIT
+
+
 def jetstream_error_code(error: Exception) -> int | None:
     """Returns the HTTP-like status code of a JetStream API error, raw or translated"""
     if isinstance(error, MessengerJetStreamError):

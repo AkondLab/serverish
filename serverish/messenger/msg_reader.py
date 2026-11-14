@@ -23,7 +23,8 @@ from serverish.base.exceptions import (MessengerReaderStopped, MessengerReaderCo
                                        MessengerReaderAlreadyOpen, MessengerRequestTimeout,
                                        MessengerTransportTimeout)
 from serverish.base.fifoset import FifoSet
-from serverish.connection.nats_errors import is_missing_stream, nats_errors_translated, translate_nats_error
+from serverish.connection.nats_errors import (is_consumer_limit, is_missing_stream, nats_errors_translated,
+                                              translate_nats_error)
 from serverish.messenger import Messenger
 from serverish.messenger.messenger import MsgDriver, subject_family
 from serverish.messenger.policies import (UNLIMITED, BatchPolicy, DeliveryPolicy, ErrorPolicy,
@@ -54,10 +55,6 @@ class _ConsumerSession:
     consumer: str | None = None
     unanswered: int = 0          # pull requests in a row the server did not answer
     gone: bool = False           # the server said the consumer does not exist any more
-
-    def same_consumer(self, other: _ConsumerSession) -> bool:
-        """Tells whether both sessions use one consumer on the server (a durable one, bound twice)"""
-        return self.consumer is not None and (self.stream, self.consumer) == (other.stream, other.consumer)
 
     def needs_replacement(self, unanswered_limit: int) -> str | None:
         """Tells why the session cannot serve the reader any more, None if it can"""
@@ -593,8 +590,10 @@ class MsgReader(MsgDriver):
                     raise e.error
                 # A missing consumer is not among them: ephemeral consumers come and go,
                 # the session is replaced. A missing stream is a deployment error.
+                # Neither is a stream which takes no more consumers: a slot may be freed.
                 cause = e.error.__cause__ if isinstance(e.error, MessengerJetStreamError) else e.error
-                if isinstance(cause, nats.js.errors.BadRequestError) or is_missing_stream(cause):
+                refused = isinstance(cause, nats.js.errors.BadRequestError) and not is_consumer_limit(cause)
+                if refused or is_missing_stream(cause):
                     log.error(st.fmt(f"fatal NATS error (not retrying): {e.error}"))
                     self._stop.set()
                     raise MessengerReaderConfigError(
@@ -749,10 +748,12 @@ class MsgReader(MsgDriver):
             elif status == "100":
                 continue  # a heartbeat, the answer is still to come
             elif status:
-                # The server closed the request for another reason (e.g. 409 on a limit
-                # of the consumer): there is nothing more to wait for in this request
-                log.debug(f"{self} Server closed the request: {status} {self._status_description(msg)}")
-                break
+                # The server refused the request (409: a limit of the consumer, a change of the
+                # cluster). Not "no data": the reader would never get any and call itself healthy
+                description = self._status_description(msg)
+                raise MessengerJetStreamError(
+                    f"The server refused a pull request for '{self.subject}': {status} {description}",
+                    code=int(status), description=description)
 
             # Real message
             msgs.append(msg)
@@ -943,13 +944,50 @@ class MsgReader(MsgDriver):
         The new session is complete before the old one is touched, so a failure leaves
         the reader exactly as it was: with a session it can use, or try to replace again.
         One attempt - whoever calls paces the retries (the reader loop: its RetryPolicy).
+
+        Two cases cannot have "the new one first", and give the old consumer up before:
+
+        - a durable consumer is its name. It is created anew, right after the last message
+          read; binding the existing one would leave what it has delivered and the reader
+          has not read to be redelivered later, out of order;
+        - a stream which takes no more consumers has no slot for a second one.
         """
-        new = await self._create_session(resume=True)
-        old, self._session = self._session, new
+        old = self._session
+        if old is not None and self.consumer_cfg.get('durable_name'):
+            await self._delete_consumer(old)
+            old.gone = True  # should the creation fail: this session has nothing to read from
+        try:
+            new = await self._create_session(resume=True)
+        except MessengerJetStreamError as e:
+            if old is None or old.gone or not is_consumer_limit(e.__cause__):
+                raise
+            await self._discard_session(old)
+            old, self._session = None, None
+            new = await self._create_session(resume=True)
+        self._session = new
         self._reconnect_count += 1
         if old is not None:
-            # a durable consumer is bound again, not created: it is the new session's as well
-            await self._discard_session(old, keep_consumer=old.same_consumer(new))
+            await self._discard_session(old, keep_consumer=old.gone)
+
+    async def _identify(self, session: _ConsumerSession) -> tuple[str, str]:
+        """Returns the stream and the name of the session's consumer, asking the server if not known"""
+        if session.consumer is None:  # a subscription assigned from outside
+            ci = await session.subscription.consumer_info()
+            session.stream, session.consumer = ci.stream_name, ci.name
+        return session.stream, session.consumer
+
+    async def _delete_consumer(self, session: _ConsumerSession) -> None:
+        """Deletes the consumer of the session; one which is not there any more is as good as deleted
+
+        Raises:
+            MessengerTransportError: the consumer could not be deleted
+        """
+        with nats_errors_translated(f"Deleting the consumer of '{self.subject}' failed"):
+            try:
+                stream, consumer = await self._identify(session)
+                await self.connection.js.delete_consumer(stream=stream, consumer=consumer)
+            except nats.js.errors.NotFoundError:
+                pass
 
     async def _discard_session(self, session: _ConsumerSession, keep_consumer: bool = False) -> None:
         """Removes a session the reader does not hold any more; best effort, never fails
@@ -958,27 +996,18 @@ class MsgReader(MsgDriver):
         expires on the server (`inactive_threshold`).
 
         Args:
-            keep_consumer: drop the subscription only - the consumer serves another session
+            keep_consumer: drop the subscription only - there is no consumer of this session to delete
         """
-        stream, consumer = session.stream, session.consumer
-        try:
-            if consumer is None and not keep_consumer:  # a subscription assigned from outside: ask who it is
-                ci = await session.subscription.consumer_info()
-                stream, consumer = ci.stream_name, ci.name
-        except Exception as e:
-            log.debug(f"{self} could not identify the consumer of a discarded session: {e}")
         try:
             await session.subscription.unsubscribe()
         except Exception as e:
             log.debug(f"{self} could not unsubscribe a discarded session: {e}")
-        if consumer is not None and not keep_consumer:
-            try:
-                await self.connection.js.delete_consumer(stream=stream, consumer=consumer)
-            except nats.js.errors.NotFoundError:
-                pass  # gone already
-            except Exception as e:
-                log.debug(f"{self} could not delete consumer {consumer} of a discarded session "
-                          f"(it will expire): {e}")
+        if keep_consumer:
+            return
+        try:
+            await self._delete_consumer(session)
+        except Exception as e:
+            log.debug(f"{self} could not delete the consumer of a discarded session (it will expire): {e}")
 
     async def _resolve_family(self) -> tuple[str | None, list[str]]:
         """Finds where the subject family is stored and which of its patterns are
