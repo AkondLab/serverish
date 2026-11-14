@@ -246,10 +246,9 @@ class MsgPublisher(MsgDriver):
                 if budget <= 0:
                     raise TimeoutError
                 async with asyncio.timeout(None if budget == UNLIMITED else budget):
-                    if budget == UNLIMITED:
-                        await js.publish(self.subject, bdata, headers=headers, **kwargs)
-                    else:
-                        await js.publish(self.subject, bdata, headers=headers, timeout=budget, **kwargs)
+                    # the budget goes to the client library as it is, UNLIMITED included: left
+                    # out, the library would put its own default (5 s) in place of "no limit"
+                    await js.publish(self.subject, bdata, headers=headers, timeout=budget, **kwargs)
                 return
             except TimeoutError as e:
                 elapsed = loop.time() - start

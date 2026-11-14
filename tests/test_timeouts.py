@@ -6,8 +6,8 @@ import pytest
 
 from serverish.base import (MessengerPublishAckTimeout, MessengerRequestTimeout, MessengerTimeout,
                             MessengerTransportTimeout, ServerishError)
-from serverish.messenger import (ErrorPolicy, OnError, RetryPolicy, get_journalpublisher, get_publisher,
-                                 get_reader)
+from serverish.messenger import (UNLIMITED, ErrorPolicy, OnError, RetryPolicy, get_journalpublisher,
+                                 get_publisher, get_reader)
 
 
 class SilentServer:
@@ -89,6 +89,30 @@ async def test_publish_attempts_still_limit_the_retries(messenger, unique_subjec
                 await pub.publish(data={'v': 1})
         assert len(server.attempts) == 2                    # the first try and one retry
     finally:
+        await pub.close()
+
+
+@pytest.mark.nats
+async def test_unlimited_attempt_is_not_cut_by_the_client_library(messenger, unique_subject):
+    """UNLIMITED means no limit: the client library is not left to put its own default in."""
+    pub = get_publisher(unique_subject, error_policy=ErrorPolicy(
+        retry=RetryPolicy(attempts=0, attempt_timeout=UNLIMITED, total_timeout=UNLIMITED)))
+    await pub.open()
+    js = pub.connection.js
+    original, default = js.publish, js._timeout
+    given = []
+
+    async def records(subject, payload, timeout=None, **kwargs):
+        given.append(timeout)
+        return await original(subject, payload, timeout=timeout, **kwargs)
+
+    js.publish = records
+    js._timeout = 0.0001            # what the library would use if it were left to choose
+    try:
+        await pub.publish(data={'v': 1})
+        assert given == [UNLIMITED]
+    finally:
+        js.publish, js._timeout = original, default
         await pub.close()
 
 
