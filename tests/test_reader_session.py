@@ -202,6 +202,71 @@ async def test_half_made_session_leaves_no_subscription_behind(messenger, unique
         await r.publish_and_expect(1)
 
 
+async def test_durable_consumer_survives_the_replacement_of_its_session(messenger, unique_subject):
+    """A durable consumer is bound by the new session, not created: removing the old session must not remove it."""
+    durable = 'durable_' + unique_subject.rsplit('.', 1)[-1]
+    async with Reading(unique_subject, error_policy=FAST, durable_name=durable) as r:
+        old = r.reader._session
+        assert old.consumer == durable
+        await r.reader._replace_session()
+        assert r.reader._session is not old and r.reader._session.consumer == durable
+        await r.reader.connection.js.consumer_info(old.stream, durable)   # raises if it was deleted
+        await r.publish_and_expect(1)
+        assert r.reader.health_status['reconnect_count'] == 1             # no second replacement was needed
+
+
+async def test_messages_waiting_in_the_local_queue_are_delivered(messenger, unique_subject):
+    """Messages delivered by an earlier pull are an answer: no new pull is sent, and no error may be made of that."""
+    publisher = get_publisher(unique_subject)
+    reader = get_reader(unique_subject, deliver_policy='all', error_policy=ErrorPolicy(on_error=OnError.RAISE))
+    await publisher.open()
+    await reader.open()
+    try:
+        for n in range(2):
+            await publisher.publish(data={'n': n})
+        subscription = reader.pull_subscription
+        # a pull whose answer nobody collected (a wait given up, a cancelled read): both messages are queued locally
+        await reader.connection.nc.publish(subscription._nms, b'{"batch": 2, "no_wait": true}', subscription._deliver)
+        async with asyncio.timeout(5):
+            while subscription._sub._pending_queue.qsize() < 2:
+                await asyncio.sleep(0.02)
+        got = [(await reader.read_next())[0]['n'] for _ in range(2)]
+        assert got == [0, 1]
+    finally:
+        await reader.close()
+        await publisher.close()
+
+
+async def test_error_streak_ended_by_a_buffered_message(messenger, unique_subject):
+    """A failure followed by a message already in the buffer: the message is returned, the failure is over."""
+    publisher = get_publisher(unique_subject)
+    reader = get_reader(unique_subject, deliver_policy='all',
+                        error_policy=ErrorPolicy(on_error=OnError.WAIT,
+                                                 retry=RetryPolicy(delay=0.05, max_delay=0.05, total_timeout=5.0)))
+    await publisher.open()
+    await reader.open()
+    real_unpack = reader.messenger.unpack_nats_msg
+    calls = []
+
+    def malformed_once(msg):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError('malformed message')
+        return real_unpack(msg)
+
+    try:
+        for n in range(2):
+            await publisher.publish(data={'n': n})
+        reader.messenger.unpack_nats_msg = malformed_once
+        data, meta = await asyncio.wait_for(reader.read_next(), timeout=5)
+        assert data == {'n': 1}
+        assert len(calls) == 2
+    finally:
+        del reader.messenger.unpack_nats_msg
+        await reader.close()
+        await publisher.close()
+
+
 async def test_recovery_attempt_does_not_outlast_the_deadline(messenger, unique_subject):
     """total_timeout limits the attempt to recover, not only the pauses between attempts."""
     reader = get_reader(unique_subject, deliver_policy='new',

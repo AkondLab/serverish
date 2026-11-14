@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import contextlib
 from asyncio import Event
 from collections import deque
 from datetime import datetime, timezone
@@ -53,6 +54,10 @@ class _ConsumerSession:
     consumer: str | None = None
     unanswered: int = 0          # pull requests in a row the server did not answer
     gone: bool = False           # the server said the consumer does not exist any more
+
+    def same_consumer(self, other: _ConsumerSession) -> bool:
+        """Tells whether both sessions use one consumer on the server (a durable one, bound twice)"""
+        return self.consumer is not None and (self.stream, self.consumer) == (other.stream, other.consumer)
 
     def needs_replacement(self, unanswered_limit: int) -> str | None:
         """Tells why the session cannot serve the reader any more, None if it can"""
@@ -298,6 +303,15 @@ class MsgReader(MsgDriver):
                     if self.deadline is not None:
                         self.deadline.reschedule(None)  # the deadline was the failure's, not the reader's
 
+            @contextlib.asynccontextmanager
+            async def limited_by(self, deadline: asyncio.Timeout):
+                """Makes the deadline of a loop pass known to `recovered()`, for as long as the pass lasts"""
+                self.deadline = deadline
+                try:
+                    yield
+                finally:
+                    self.deadline = None
+
             def raise_if_cancelled(self) -> None:
                 """Raises CancelledError when the calling task was cancelled during this read_next()
 
@@ -524,8 +538,7 @@ class MsgReader(MsgDriver):
             st.raise_if_cancelled()
             failing = st.error
             try:
-                async with asyncio.timeout(recovery_deadline()) as deadline:
-                    st.deadline = deadline
+                async with asyncio.timeout(recovery_deadline()) as deadline, st.limited_by(deadline):
                     # If the step method:
                     #  - retuns data                       - it will raiseReturnException
                     #  - corrected something               - it will raise ContinueException
@@ -657,6 +670,9 @@ class MsgReader(MsgDriver):
                 if not status:  # Skip status messages
                     msgs.append(msg)
                     needed -= 1
+                    # delivered by the server to this very queue: the session works
+                    self._server_answered = True
+                    session.unanswered = 0
                 queue.task_done()
             except Exception:
                 pass
@@ -932,17 +948,21 @@ class MsgReader(MsgDriver):
         old, self._session = self._session, new
         self._reconnect_count += 1
         if old is not None:
-            await self._discard_session(old)
+            # a durable consumer is bound again, not created: it is the new session's as well
+            await self._discard_session(old, keep_consumer=old.same_consumer(new))
 
-    async def _discard_session(self, session: _ConsumerSession) -> None:
+    async def _discard_session(self, session: _ConsumerSession, keep_consumer: bool = False) -> None:
         """Removes a session the reader does not hold any more; best effort, never fails
 
         Whatever cannot be removed now removes itself: a consumer nobody pulls from
         expires on the server (`inactive_threshold`).
+
+        Args:
+            keep_consumer: drop the subscription only - the consumer serves another session
         """
         stream, consumer = session.stream, session.consumer
         try:
-            if consumer is None:  # a subscription assigned from outside: ask who it is
+            if consumer is None and not keep_consumer:  # a subscription assigned from outside: ask who it is
                 ci = await session.subscription.consumer_info()
                 stream, consumer = ci.stream_name, ci.name
         except Exception as e:
@@ -951,7 +971,7 @@ class MsgReader(MsgDriver):
             await session.subscription.unsubscribe()
         except Exception as e:
             log.debug(f"{self} could not unsubscribe a discarded session: {e}")
-        if consumer is not None:
+        if consumer is not None and not keep_consumer:
             try:
                 await self.connection.js.delete_consumer(stream=stream, consumer=consumer)
             except nats.js.errors.NotFoundError:
