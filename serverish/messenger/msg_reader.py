@@ -947,13 +947,14 @@ class MsgReader(MsgDriver):
 
         Two cases cannot have "the new one first", and give the old consumer up before:
 
-        - a durable consumer is its name. It is created anew, right after the last message
-          read; binding the existing one would leave what it has delivered and the reader
-          has not read to be redelivered later, out of order;
+        - a consumer which carries a name fixed by the configuration (a durable one) is that
+          name. It is created anew, right after the last message read; binding the existing
+          one would leave what it has delivered and the reader has not read to be redelivered
+          later, out of order;
         - a stream which takes no more consumers has no slot for a second one.
         """
         old = self._session
-        if old is not None and self.consumer_cfg.get('durable_name'):
+        if old is not None and await self._has_fixed_name(old):
             await self._delete_consumer(old)
             old.gone = True  # should the creation fail: this session has nothing to read from
         try:
@@ -968,6 +969,20 @@ class MsgReader(MsgDriver):
         self._reconnect_count += 1
         if old is not None:
             await self._discard_session(old, keep_consumer=old.gone)
+
+    async def _has_fixed_name(self, session: _ConsumerSession) -> bool:
+        """Tells whether the next session would get the very consumer of this one
+
+        Judged by the name the consumer really carries, not by what was asked for: the client
+        library names a consumer after `durable_name`, and today ignores `name` of the consumer
+        configuration (every such session gets a consumer of its own).
+        """
+        fixed = {self.consumer_cfg.get('durable_name'), self.consumer_cfg.get('name')} - {None}
+        if not fixed:
+            return False
+        with nats_errors_translated(f"Identifying the consumer of '{self.subject}' failed"):
+            _, consumer = await self._identify(session)
+        return consumer in fixed
 
     async def _identify(self, session: _ConsumerSession) -> tuple[str, str]:
         """Returns the stream and the name of the session's consumer, asking the server if not known"""

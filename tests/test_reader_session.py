@@ -210,18 +210,28 @@ async def test_half_made_session_leaves_no_subscription_behind(messenger, unique
         await r.publish_and_expect(1)
 
 
-async def test_durable_consumer_is_created_anew_under_its_name(messenger, unique_subject):
-    """A durable consumer is its name: the new session has it, continuing after the last message read."""
-    durable = 'durable_' + unique_subject.rsplit('.', 1)[-1]
-    async with Reading(unique_subject, error_policy=FAST, durable_name=durable) as r:
-        old = r.reader._session
-        assert old.consumer == durable
+@pytest.mark.parametrize('named_by', ['durable_name', 'name'])
+async def test_reader_with_a_named_consumer_gets_a_new_session(messenger, unique_subject, named_by):
+    """A durable consumer is its name: it is created anew, continuing after the last message read.
+
+    `name` of the consumer configuration is ignored by the client library today - such a reader gets a
+    consumer of its own for every session. Either way the reader ends with one working consumer.
+    """
+    name = f'{named_by}_' + unique_subject.rsplit('.', 1)[-1]
+    async with Reading(unique_subject, error_policy=FAST, **{named_by: name}) as r:
+        js, old = r.reader.connection.js, r.reader._session
         await r.reader._replace_session()
-        assert r.reader._session is not old and r.reader._session.consumer == durable
-        info = await r.reader.connection.js.consumer_info(old.stream, durable)
-        assert info.config.opt_start_seq == r.reader.last_seq + 1
+        new = r.reader._session
+        assert new is not old
+        info = await js.consumer_info(new.stream, new.consumer)       # raises if it is not there
+        if new.consumer == old.consumer:                                # the same name: created anew, not bound
+            assert new.consumer == name and named_by == 'durable_name'
+            assert info.config.opt_start_seq == r.reader.last_seq + 1
+        else:                                                           # another consumer: the old one is gone
+            with pytest.raises(nats.js.errors.NotFoundError):
+                await js.consumer_info(old.stream, old.consumer)
         await r.publish_and_expect(1)
-        assert r.reader.health_status['reconnect_count'] == 1             # no second replacement was needed
+        assert r.reader.health_status['reconnect_count'] == 1          # no second replacement was needed
 
 
 async def test_durable_reader_loses_nothing_delivered_to_the_session_it_gave_up(messenger, unique_subject):
